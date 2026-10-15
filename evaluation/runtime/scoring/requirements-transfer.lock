@@ -1,0 +1,12 @@
+# Exact Linux x86_64 CPython3.11 wheel hashes from the verified scoring capsule.
+# Supply a licensed wheelhouse; no implicit network resolution or sdist builds.
+absl-py==2.1.0 --hash=sha256:526a04eadab8b4ee719ce68f204172ead1027549089702d99b9059f129ff1308
+click==8.1.7 --hash=sha256:ae74fb96c20a0277a1d615f1e4d73c8414f5a98db8b799a7931d1582f3390c28
+immutabledict==4.2.0 --hash=sha256:d728b2c2410d698d95e6200237feb50a695584d20289ad3379a439aa3d90baba
+joblib==1.4.2 --hash=sha256:06d478d5674cbc267e7496a410ee875abd68e4340feff4490bcb7afb88060ae6
+langdetect==1.0.9 --hash=sha256:955016b95951bb42dc72808fe0f7dc0c1ad29f8f1eee2b60532515128fbb3f98
+nltk==3.9.1 --hash=sha256:4fa26829c5b00715afe3061398a8989dc643b92ce7dd93fb4585a70930d168a1
+numpy==1.26.4 --hash=sha256:666dbfb6ec68962c033a450943ded891bed2d54e6755e35e5835d63f4f6931d5
+regex==2024.9.11 --hash=sha256:6113c008a7780792efc80f9dfe10ba0cd043cbf8dc9a76ef757850f51b4edc50
+six==1.16.0 --hash=sha256:8abb2f1d86890a2dfb989f9a77cfcfd3e47c2a354b01111771326f8aa26e0254
+tqdm==4.66.5 --hash=sha256:90279a3770753eafc9194a0364852159802111925aa30eb3f9d85b0e805ac7cd

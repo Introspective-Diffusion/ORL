@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "family": "qwen-dlm",
+  "status": "Validated main-cell protocol; supplied pinned runtime and frozen inputs required",
+  "engine": {"runtime_env": "QWEN_DLM_RUNTIME_ROOT", "engine_revision": "b974f47818b5c8e6ab855da8f19e1cad0c92464f", "harness_revision": "f2230a5c2fcca72440d6c3fea4b50441b7d7516c", "image": "docker.io/lmsysorg/sglang@sha256:065d403274324cc9dec4f830ca62540e6ac586746e1aed268c98a2b347d5853f", "tensor_parallel_size": 1, "max_running_requests": 1, "context_length": 65536, "attention_backend": "flashinfer", "cuda_graph_batch_sizes": [1], "environment": {"SGLANG_FLASHINFER_PREFILL_BACKEND": "fa3", "SDAR_FUSED_ROW_STATS": "1", "SDAR_COMMIT_GRAPH": "1"}},
+  "sampling": {"temperature": 0.0, "top_k": 0, "top_p": 1.0, "server_seed": 1234},
+  "decoder_common": {"block_size": 256, "denoising_steps": 256, "max_steps_per_block": 256, "confidence_temperature": 1.0, "noise_mode": "random_vocab", "random_token_high": 151669, "deterministic_randtok": true, "randtok_seed": 12345, "allow_accepted_change": true, "force_accept_leftmost": true, "post_accept_refine_steps": 0, "causal_prefill": true, "self_conditioning_post_norm": true},
+  "roles": {
+    "base": {"decoder": {"accept_rule": "prob_threshold"}, "benchmark_decoder": {"gsm8k": {"prob_threshold": 0.85, "edit_threshold": 0.85}, "math500": {"prob_threshold": 0.85, "edit_threshold": 0.85}, "humaneval": {"prob_threshold": 0.9, "edit_threshold": 0.9}, "mbpp": {"prob_threshold": 0.85, "edit_threshold": 0.85}}, "max_new_tokens": {"gsm8k": 49152, "math500": 49152, "humaneval": 32768, "mbpp": 49152}},
+    "orl": {"decoder": {"accept_rule": "entropy_budget", "edit_threshold": 0.9, "confidence_temperature_mode": "step_linear", "confidence_temperature_max": 1.0, "confidence_temperature_min": 0.6, "confidence_temperature_step_decrement": 0.01}, "benchmark_decoder": {"gsm8k": {"entropy_bound": 0.4}, "math500": {"entropy_bound": 0.4}, "humaneval": {"entropy_bound": 0.6}, "mbpp": {"entropy_bound": 0.6}}, "max_new_tokens": {"gsm8k": 32768, "math500": 32768, "humaneval": 32768, "mbpp": 49152}}
+  },
+  "source_references": ["inference/adapters/qwen_dlm.py", "repro/eval/eval_client.py", "repro/eval/run_eval.py"],
+  "notes": ["QwenDLM server seed 1234 is distinct from decoder random-token seed 12345.", "Base/ORL compare selected decoder policies, not a checkpoint-only intervention."]
+}

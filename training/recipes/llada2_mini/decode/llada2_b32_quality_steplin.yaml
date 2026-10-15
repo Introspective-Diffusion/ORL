@@ -1,0 +1,39 @@
+# SDARPrefixKV rollout decoder for LLaDA-2.1-mini ORL training.
+# Quality mode (prob 0.7 / edit 0.5 / 16 post-accept refine steps), block 32, mask noise,
+# no logits shift, block-causal prompt prefill, reuse_refine commit, step_linear confidence
+# temperature 1.0 -> 0.6 (-0.08 per forward, first forward of each block at 1.0).
+# Source: decoder config of the paper run (research repository commit 3bfc1fb7).
+confidence_temperature: 1.0
+confidence_temperature_mode: step_linear
+confidence_temperature_max: 1.0
+confidence_temperature_min: 0.6
+confidence_temperature_step_decrement: 0.08
+accept_rule: prob_threshold
+force_accept_leftmost: true
+allow_accepted_change: true
+post_accept_refine_steps: 16
+top_k: 0
+top_p: 1.0
+active_input_mode: exact
+adjacent_entropy_contraction: true
+edit_shield_eos: false
+edit_shield_eos_window: 0
+deterministic_randtok: true
+randtok_seed: 12345
+block_size: 32
+denoising_steps: 32
+max_steps_per_block: 32
+logits_shift: false
+prob_threshold: 0.7
+edit_threshold: 0.5
+noise_mode: mask
+random_token_high: 156895
+temperature: 1.0
+temperature_max: 1.0
+self_conditioning_post_norm: false
+self_conditioning_residual_scale: 1.0
+causal_prefill: true
+block_causal_prefill: true
+prompt_tail_in_first_block: true
+commit_mode: reuse_refine
+confidence_temperature_first_step_full: true

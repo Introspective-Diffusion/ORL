@@ -1,0 +1,54 @@
+# S4: self-conditioning, from S3 checkpoint-31250 (make_stage_model.py s4); the paper run's 78,417 steps,
+# of which checkpoint-38750 is QwenDLM-4B
+
+### model (model_name_or_path and output_dir are set by scripts/train.sh)
+trust_remote_code: true
+train_from_scratch: false
+
+### method
+stage: sft
+do_train: true
+finetuning_type: full
+deepspeed: examples/deepspeed/ds_z2_config.json
+
+### dataset (pretokenized rows: input_ids, attention_mask, labels)
+dataset: offline_s4
+template: qwen3
+pretokenized: true
+packing: false
+neat_packing: false
+cutoff_len: 8192
+block_length: 256
+truncate_mode: cut
+overwrite_cache: false
+preprocessing_num_workers: 4
+dataloader_num_workers: 4
+
+### loss: denoising CE on the noisy copy + clean next-token CE, auto-balanced to the denoising loss
+ce_alpha: 1.0
+idlm_loss_type: ar
+loss_auto_balance: true
+xt_rkl_alpha: 0.0
+three_way_loss_auto_balance: false
+entropy_loss_alpha: 0.0
+xt_x0_jsd_alpha: 0.0
+
+### output
+logging_steps: 5
+save_steps: 250
+save_total_limit: 5
+save_only_model: false
+overwrite_output_dir: false
+plot_loss: true
+report_to: none
+
+### train (64 GPUs (8 nodes), global batch 128)
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 1
+learning_rate: 1.0e-5
+lr_scheduler_type: constant
+warmup_ratio: 0.0
+max_steps: 78417
+bf16: true
+ddp_timeout: 1800
+include_effective_tokens_per_second: true

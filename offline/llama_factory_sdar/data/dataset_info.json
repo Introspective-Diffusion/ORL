@@ -1,0 +1,42 @@
+{
+  "offline_s1": {
+    "file_name": "offline_sft",
+    "formatting": "sharegpt",
+    "columns": {
+      "input_ids": "input_ids",
+      "attention_mask": "attention_mask",
+      "labels": "labels"
+    },
+    "split": "train[0:790016]"
+  },
+  "offline_s2": {
+    "file_name": "offline_sft",
+    "formatting": "sharegpt",
+    "columns": {
+      "input_ids": "input_ids",
+      "attention_mask": "attention_mask",
+      "labels": "labels"
+    },
+    "split": "train[1000000:2000000]"
+  },
+  "offline_s3": {
+    "file_name": "offline_sft",
+    "formatting": "sharegpt",
+    "columns": {
+      "input_ids": "input_ids",
+      "attention_mask": "attention_mask",
+      "labels": "labels"
+    },
+    "split": "train[8000000:9000000]"
+  },
+  "offline_s4": {
+    "file_name": "offline_sft",
+    "formatting": "sharegpt",
+    "columns": {
+      "input_ids": "input_ids",
+      "attention_mask": "attention_mask",
+      "labels": "labels"
+    },
+    "split": "train"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "family": "llada",
+  "status": "Validated main/transfer protocol; supplied multi_gen runtime and frozen inputs required",
+  "engine": {"runtime_env": "LLADA_RUNTIME_ROOT", "engine_revision": "f2230a5c2fcca72440d6c3fea4b50441b7d7516c", "image": "docker.io/lmsysorg/sglang@sha256:065d403274324cc9dec4f830ca62540e6ac586746e1aed268c98a2b347d5853f", "algorithm": "SDARPrefixKV", "tensor_parallel_size": 1, "request_concurrency": 1, "mem_fraction_static": 0.6, "attention_backend": "flashinfer", "disable_radix_cache": true, "disable_cuda_graph": false, "cuda_graph_batch_sizes": [1, 2], "context_length": null, "context_policy": "No explicit override in verified multi_gen engine; supplied model/runtime default"},
+  "sampling": {"temperature": 0.0, "temperature_min": 0.0, "temperature_max": 0.0, "top_k": 0, "top_p": 1.0},
+  "decoder_common": {"confidence_temperature": 1.0, "confidence_temperature_mode": "fixed", "accept_rule": "prob_threshold", "edit_threshold": 0.5, "block_size": 32, "denoising_steps": 32, "max_steps_per_block": 32, "force_accept_leftmost": true, "allow_accepted_change": true, "post_accept_refine_steps": 16, "active_input_mode": "exact", "adjacent_entropy_contraction": true, "edit_shield_eos": false, "edit_shield_eos_window": 0, "deterministic_randtok": true, "randtok_seed": 12345, "logits_shift": false, "noise_mode": "mask", "random_token_high": 156895, "self_conditioning_post_norm": false, "self_conditioning_residual_scale": 1.0, "causal_prefill": true, "block_causal_prefill": true, "prompt_tail_in_first_block": true, "commit_mode": "fused_next"},
+  "roles": {
+    "base": {"decoder": {"prob_threshold": 0.7}, "benchmark_decoder": {}, "max_new_tokens": {"gsm8k": 4096, "math500": 4096, "humaneval": 4096, "mbpp": 4096, "aime": 16384, "gpqa": 16384, "mmlu_pro": 4096, "lcb": 4096, "ifeval": 2048}},
+    "orl": {"decoder": {"prob_threshold": 0.85}, "benchmark_decoder": {}, "max_new_tokens": {"gsm8k": 4096, "math500": 4096, "humaneval": 4096, "mbpp": 4096, "aime": 16384, "gpqa": 16384, "mmlu_pro": 4096, "lcb": 4096, "ifeval": 2048}}
+  },
+  "seed_binding": "For transfer, set decoder randtok_seed to each listed run seed; main/quick use 12345",
+  "source_references": ["inference/adapters/llada.py"],
+  "historical_source_references_not_bundled": ["repro/configs/llada2_b32_QUAL_p07_e05_post16_fused_noanneal.yaml", "repro/experiments/paper_repro_20260917/llada_worker.sh"],
+  "notes": ["The source YAML temperature 1.0 is overridden to 0.0, including min/max, in verified workers.", "Confidence annealing is off for both selected checkpoints."]
+}

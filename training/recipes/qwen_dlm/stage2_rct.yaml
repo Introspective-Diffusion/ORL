@@ -1,0 +1,330 @@
+# Generated from the captured launch of the paper run; see training/recipes/README.md.
+name: qwen_dlm_stage2_rct
+description: 'QwenDLM ORL stage 2 (steps 326-350 of the paper run; paper checkpoint = step 350): stage 1 plus entropy-gated CE / capped reverse KL (zeta 0.10, cap 5), lr 5e-6, resumed from the stage-1 step-325 FSDP checkpoint (optimizer and data.pt included).'
+nodes: 1
+gpus_per_node: 8
+base_config: QwenDLM-4B-postnorm002-DAPO-sglang-noedit-cwppo-smoke
+inputs:
+  MODEL_PATH: checkpoint-38750-scrp8 (QwenDLM SFT checkpoint with the gamma=8 residual reparameterization; see training/tools/make_scrp_base.py)
+  TRAIN_FILE: code_l0-20260828/train.parquet (819 OpenCodeInstruct-derived problems)
+  VAL_FILE: 'validation parquet (loaded but unused: test_freq=-1)'
+  RUN_DIR: output directory of this run
+  RAY_TMP_DIR: short local path for Ray's temp dir (e.g. /dev/shm/orl-ray-$USER)
+  RESUME_PATH: stage-1 FSDP checkpoint directory global_step_325
+  NET_IFNAME: 'network interface for NCCL/Gloo (default: the default-route interface)'
+env:
+  GLOO_SOCKET_IFNAME: ${NET_IFNAME}
+  HYDRA_FULL_ERROR: '1'
+  MALLOC_MMAP_THRESHOLD_: '131072'
+  MALLOC_TRIM_THRESHOLD_: '134217728'
+  MKL_NUM_THREADS: '1'
+  NCCL_DEBUG: WARN
+  NCCL_IB_DISABLE: '1'
+  NCCL_SOCKET_IFNAME: ${NET_IFNAME}
+  NUMEXPR_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONHASHSEED: ''
+  RAY_DEDUP_LOGS: '0'
+  RAY_memory_monitor_refresh_ms: '250'
+  RAY_memory_usage_threshold: '0.99'
+  SGLANG_JSON_MODEL_OVERRIDE_ARGS: '{"self_conditioning_prob":1.0}'
+  SGLANG_MEMORY_SAVER_CUDA_GRAPH: '1'
+  SGLANG_SDAR_ASYNC_BACKPRESSURE: block
+  SGLANG_SDAR_ASYNC_CAPTURE: '1'
+  SGLANG_SDAR_ASYNC_DRAIN_TIMEOUT_S: '30'
+  SGLANG_SDAR_ASYNC_ENQUEUE_TIMEOUT_S: '300'
+  SGLANG_SDAR_ASYNC_QUEUE_DEPTH: '1024'
+  SGLANG_SDAR_ASYNC_QUEUE_MAX_BYTES: '2147483648'
+  SGLANG_SDAR_CUDA_GRAPH_LOG_INTERVAL: '500'
+  SGLANG_SDAR_GPU_REPLAY_ARENA: '1'
+  SGLANG_SDAR_GPU_REPLAY_ARENA_CHUNK_BYTES: '268435456'
+  SGLANG_SDAR_GPU_REPLAY_EXPORT_LOGITS_SOURCE: '1'
+  SGLANG_SDAR_GPU_REPLAY_FORCE_RECYCLE_AT_IDLE_PREFILL: '1'
+  SGLANG_SDAR_GPU_REPLAY_LEASE: '1'
+  SGLANG_SDAR_GPU_REPLAY_TRIM_RECYCLED_CACHE: '1'
+  SGLANG_SDAR_RANDTOK_SEED: '20260725'
+  SGLANG_SDAR_REPLAY_EARLY_STREAM: '0'
+  SGLANG_SDAR_REPLAY_PRESELECT_DIRECTION: highest
+  SGLANG_SDAR_REPLAY_PRESELECT_FINAL_POLICY: always_include
+  SGLANG_SDAR_REPLAY_PRESELECT_FRACTION: ''
+  SGLANG_SDAR_REPLAY_PRESELECT_GROUP_FIELDS: response_uid,block_index
+  SGLANG_SDAR_REPLAY_PRESELECT_MODE: earliest
+  SGLANG_SDAR_REPLAY_PRESELECT_SCORE: new_accept_count
+  SGLANG_SDAR_REPLAY_STEP_SAMPLE_FRACTION: '1.0'
+  SGLANG_SDAR_REPLAY_STEP_SAMPLE_MODE: bernoulli
+  SGLANG_SDAR_REPLAY_STEP_SAMPLE_SEED: '20260725'
+  SGLANG_SDAR_ROLLOUT_CUDA_GRAPH: 'true'
+  SGLANG_SDAR_STREAM_REPLAY_TENSOR_STORE: table
+  SGLANG_SDAR_TPF_METADATA_FIRST: '0'
+  SGLANG_SDAR_TRACE_DIR: ${RUN_DIR}/trace
+  SGLANG_SDAR_TRACE_TENSORS: '1'
+  SGLANG_SDAR_TRACE_TENSOR_MAX_RECORDS: '0'
+  SGLANG_SDAR_TRACE_TENSOR_MAX_TOKENS: '256'
+  SGLANG_SDAR_TRACE_TENSOR_STORE: table
+  SGLANG_UPDATE_WEIGHTS_CPU_SERIALIZE: '0'
+  SGLANG_UPDATE_WEIGHTS_DISTRIBUTED: '0'
+  VERL_ACTOR_CHUNK_LOSS_DEBUG: '0'
+  VERL_ACTOR_CHUNK_LOSS_DEBUG_DIR: ${RUN_DIR}/actor_chunk_loss_debug
+  VERL_ACTOR_INPUT_CHECKSUM_DEBUG: '0'
+  VERL_ACTOR_INPUT_CHECKSUM_DIR: ${RUN_DIR}/actor_input_checksum_debug
+  VERL_ACTOR_PARAM_CHECKSUM_DEBUG: '0'
+  VERL_ACTOR_PARAM_CHECKSUM_DIR: ${RUN_DIR}/actor_param_checksum_debug
+  VERL_ACTOR_PARAM_CHECKSUM_LIMIT: '64'
+  VERL_ACTOR_ROLLOUT_SHARED_WEIGHTS: '1'
+  VERL_ACTOR_ROLLOUT_STREAM_EXPORT: '1'
+  VERL_LOGGING_LEVEL: INFO
+  VERL_QWEN_ALLOW_SHORT_SMOKE: '0'
+  VERL_QWEN_BLOCK_LOCAL_REPLAY: '0'
+  VERL_REPLAY_ROW_MANIFEST: '0'
+  VERL_REPLAY_ROW_MANIFEST_PATH: ${RUN_DIR}/replay_row_manifest.jsonl
+  VERL_RESPONSE_PREFIX: <think>
+  VERL_ROLLOUT_DUMP_ASYNC: '1'
+  VERL_ROLLOUT_DUMP_MODE: compact
+  VERL_SDAR_ATTACH_IN_AGENT_WORKER: '1'
+  VERL_SDAR_GPU_REPLAY_RELAY: '1'
+  VERL_SDAR_GPU_REPLAY_RELAY_TRIM_RECYCLED_CACHE: '1'
+  VERL_SDAR_GPU_REPLAY_RELAY_VISIBLE_DEVICES: 0,1,2,3,4,5,6,7
+  VERL_SGLANG_BATCH_INPUT_IDS: '0'
+  VERL_SGLANG_BATCH_RPC: '0'
+  VERL_STRICT_PERSISTENT_LIFECYCLE: '1'
+  VERL_TPF_METADATA_FIRST: '0'
+  WANDB_MODE: online
+  VERL_ACTOR_RESUME_LR_OVERRIDE: 5e-6
+  DLLM_STOP_TOKEN_IDS: ''
+overrides:
+- ++actor_rollout_ref.model.path=${MODEL_PATH}
+- ++actor_rollout_ref.model.use_remove_padding=true
+- ++actor_rollout_ref.model.override_config.attn_implementation=eager
+- ++actor_rollout_ref.actor.use_remove_padding=true
+- ++actor_rollout_ref.actor.strategy=fsdp
+- ++actor_rollout_ref.actor.fsdp_config.fsdp_size=8
+- ++actor_rollout_ref.actor.block_length=256
+- ++actor_rollout_ref.actor.ppo_mini_batch_size=8
+- ++actor_rollout_ref.actor.ppo_max_token_len_per_gpu=40960
+- ++actor_rollout_ref.actor.confidence_weighted_ppo.enable=false
+- ++actor_rollout_ref.actor.dense_noisy_pg.enable=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.enable=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.mode=replace
+- ++actor_rollout_ref.actor.generation_consistency_jsd.objective=trace_all_ce
+- ++actor_rollout_ref.actor.generation_consistency_jsd.teacher_source=rollout_final
+- ++actor_rollout_ref.actor.generation_consistency_jsd.entropy_coef=0.0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_replay_fp32_grad_accum=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_replay_all_steps=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_replay_full_blocks_only=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_future_logits_offset=0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_future_skip_tail_steps=0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_future_tail_policy=strict_skip
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_future_train_all_missing_with_final=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_future_train_final_step_with_final=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_future_clean_filter=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_future_clean_consistency_enable=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_future_hard_label_ce=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.clean_consistency_high_prob_threshold=0.9
+- ++actor_rollout_ref.actor.generation_consistency_jsd.clean_consistency_low_prob_threshold=0.5
+- ++actor_rollout_ref.actor.generation_consistency_jsd.stream_replay_chunk_size=1
+- ++actor_rollout_ref.actor.generation_consistency_jsd.stream_replay_empty_cache=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.tpf_reinforce.metadata_first=0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.stream_replay_step_stride=1
+- ++actor_rollout_ref.actor.generation_consistency_jsd.stream_replay_step_offset=0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.loss_coef=1.0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.row_chunk_size=1
+- ++actor_rollout_ref.actor.generation_consistency_jsd.selected_vocab_size=0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.teacher_max_prob_threshold=0.0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.student_final_prob_threshold=0.9
+- ++actor_rollout_ref.actor.generation_consistency_jsd.clean_filter_require_top_match=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.temperature=1.0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.logit_clip=50.0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.prob_eps=1.0e-6
+- ++actor_rollout_ref.actor.sanitize_nonfinite_grads=true
+- ++actor_rollout_ref.actor.compute_old_log_prob_entropy=false
+- ++actor_rollout_ref.actor.use_raw_replay_log_probs=true
+- ++actor_rollout_ref.actor.use_rollout_log_probs=false
+- ++actor_rollout_ref.actor.skip_old_log_prob_for_jsd_replace=true
+- ++actor_rollout_ref.actor.report_rollout_corr_metrics=false
+- ++actor_rollout_ref.actor.optim.lr=5e-6
+- ++actor_rollout_ref.actor.optim.lr_warmup_steps=0
+- ++actor_rollout_ref.actor.optim.weight_decay=0.1
+- ++actor_rollout_ref.rollout.response_length=8192
+- ++actor_rollout_ref.rollout.n=8
+- ++actor_rollout_ref.rollout.tensor_model_parallel_size=1
+- ++actor_rollout_ref.rollout.do_sample=true
+- ++actor_rollout_ref.rollout.temperature=1.0
+- ++actor_rollout_ref.rollout.top_k=-1
+- ++actor_rollout_ref.rollout.top_p=1.0
+- ++actor_rollout_ref.rollout.gpu_memory_utilization=0.35
+- ++actor_rollout_ref.rollout.enforce_eager=true
+- ++actor_rollout_ref.rollout.free_cache_engine=true
+- ++actor_rollout_ref.rollout.max_model_len=10240
+- ++actor_rollout_ref.rollout.max_num_batched_tokens=10240
+- ++actor_rollout_ref.rollout.max_num_seqs=1
+- ++actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=40960
+- ++actor_rollout_ref.rollout.calculate_log_probs=false
+- ++actor_rollout_ref.rollout.speed_only_dummy_rollout_logprobs=false
+- ++actor_rollout_ref.rollout.speed_only_dummy_rollout_logprobs_skip_actor_update=true
+- ++actor_rollout_ref.rollout.agent.num_workers=8
+- ++actor_rollout_ref.rollout.checkpoint_engine.backend=naive
+- ++actor_rollout_ref.rollout.engine_kwargs.block_length=256
+- ++actor_rollout_ref.rollout.engine_kwargs.sglang.patched_sglang_path=${ORL_TRAINING}/sglang
+- ++actor_rollout_ref.rollout.engine_kwargs.sglang.dllm_algorithm=SDARPrefixKV
+- ++actor_rollout_ref.rollout.engine_kwargs.sglang.dllm_algorithm_config=${ORL_RECIPE_DIR}/decode/qwen_dlm_b256_eb04_steplin.yaml
+- ++actor_rollout_ref.rollout.engine_kwargs.sglang.attention_backend=flashinfer
+- ++actor_rollout_ref.rollout.engine_kwargs.sglang.enable_memory_saver=true
+- ++actor_rollout_ref.rollout.engine_kwargs.sglang.sdar_rollout_cuda_graph=true
+- ++actor_rollout_ref.rollout.engine_kwargs.sglang.sdar_rollout_cuda_graph_capture_sizes=[1]
+- ++data.train_files=${TRAIN_FILE}
+- ++data.val_files=${VAL_FILE}
+- ++data.train_batch_size=1
+- ++data.gen_batch_size=1
+- ++data.val_batch_size=8
+- ++data.train_max_samples=-1
+- ++data.val_max_samples=32
+- ++data.max_prompt_length=2048
+- ++data.max_response_length=8192
+- ++data.shuffle=false
+- ++custom_reward_function.path=${ORL_TRAINING}/rewards/code_exec.py
+- ++reward.custom_reward_function.path=${ORL_TRAINING}/rewards/code_exec.py
+- ++algorithm.ar_prob_advantage.max_training_rounds_per_sample=8192
+- ++trainer.nnodes=1
+- ++trainer.n_gpus_per_node=8
+- ++trainer.total_training_steps=350
+- ++trainer.total_epochs=350
+- ++trainer.logger=[console]
+- ++trainer.project_name=orl-qwen-dlm
+- ++trainer.val_before_train=false
+- ++trainer.test_freq=-1
+- ++trainer.save_freq=10
+- ++trainer.max_actor_ckpt_to_keep=0
+- ++trainer.max_critic_ckpt_to_keep=1
+- ++trainer.resume_mode=resume_path
+- ++trainer.resume_from_path=${RESUME_PATH}
+- ++trainer.experiment_name=${EXPERIMENT_NAME}
+- ++trainer.default_local_dir=${RUN_DIR}/checkpoints
+- ++trainer.rollout_data_dir=${RUN_DIR}/rollouts
+- ++trainer.validation_data_dir=${RUN_DIR}/validation
+- ++trainer.split_gpu_streaming.enable=false
+- ++trainer.split_gpu_streaming.rollout_gpus=8
+- ++trainer.split_gpu_streaming.actor_gpus=8
+- ++trainer.split_gpu_streaming.per_node_split=false
+- ++trainer.split_gpu_streaming.node_local_replay=false
+- ++trainer.split_gpu_streaming.node_local_actor_dispatch=false
+- ++trainer.split_gpu_streaming.node_local_delayed_grad_sync=false
+- ++trainer.split_gpu_streaming.node_local_consumer_flush_timeout_ms=0
+- ++trainer.split_gpu_streaming.node_local_consumer_max_inflight_chunks=4
+- ++trainer.split_gpu_streaming.overlap_pipeline=true
+- ++trainer.split_gpu_streaming.direct_compact_enable=true
+- ++trainer.split_gpu_streaming.replay_queue_chunk_size=1
+- ++trainer.split_gpu_streaming.replay_queue_pull_max_items=1
+- ++trainer.split_gpu_streaming.replay_queue_max_items=0
+- ++trainer.split_gpu_streaming.raw_replay_queue_max_items=0
+- ++trainer.split_gpu_streaming.raw_replay_queue_pull_max_items=1
+- ++trainer.split_gpu_streaming.tensor_replay_row_chunk_size=1
+- ++trainer.split_gpu_streaming.tensor_replay_empty_cache=false
+- ++trainer.split_gpu_streaming.tensor_replay_grad_rescale_basis=active_tokens
+- ++trainer.split_gpu_streaming.consume_max_inflight_chunks=1
+- ++trainer.split_gpu_streaming.direct_compact_local_tail=true
+- ++trainer.split_gpu_streaming.direct_compact_replay_tensor_store=table
+- ++trainer.split_gpu_streaming.actor_tensor_chunk_store=shm
+- ++trainer.split_gpu_streaming.actor_tensor_chunk_dispatch=dp
+- ++trainer.split_gpu_streaming.gemma_stream_wave_aligned_pack=false
+- ++trainer.split_gpu_streaming.direct_compact_local_tail_parity_check=false
+- ++trainer.split_gpu_streaming.direct_compact_shadow_trace_all_manifest=false
+- ++trainer.split_gpu_streaming.tensor_grad_parity_check=false
+- ++trainer.split_gpu_streaming.tensor_grad_parity_max_rows=16
+- ++trainer.split_gpu_streaming.tensor_grad_parity_chunk_size=64
+- ++trainer.split_gpu_streaming.objective_grad_parity_check=false
+- ++trainer.split_gpu_streaming.objective_grad_parity_max_rows=16
+- ++trainer.split_gpu_streaming.ray_put_tensor_chunks=false
+- ++trainer.split_gpu_streaming.skip_weight_sync=false
+- ++actor_rollout_ref.actor.qwen_nostream_grpo.enable=false
+- ++actor_rollout_ref.model.override_config.self_conditioning_prob=1.0
+- ++actor_rollout_ref.actor.entropy_coeff=0
+- ++actor_rollout_ref.actor.calculate_entropy=false
+- ++actor_rollout_ref.actor.use_dynamic_bsz=true
+- ++actor_rollout_ref.actor.ppo_epochs=1
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_all_ce_token_scope=active_block_all
+- ++actor_rollout_ref.actor.generation_consistency_jsd.require_self_conditioning_replay=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.excluded_label_token_ids=[]
+- ++actor_rollout_ref.actor.generation_consistency_jsd.eos_absorption.enable=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.eos_absorption.extra_tokens=16
+- ++actor_rollout_ref.actor.generation_consistency_jsd.negative_action_pg.enable=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.negative_action_pg.advantage=-1.0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.negative_action_pg.ce_loss_coef=1.0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.negative_action_pg.loss_coef=1.0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.negative_action_pg.global_token_normalization=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.enable=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.mode=correctness_only
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.require_correct=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.reject_length=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.max_word_run=3
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.min_unique_word_ratio=0.16
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.max_answer_markers=1
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.max_boxed_markers=3
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.max_repeated_character_run=32
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.max_whitespace_run=64
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.tail_window_chars=512
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.min_tail_nonspace_chars=128
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.min_tail_unique_character_ratio=0.02
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.long_ngram_size=12
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.max_long_ngram_occurrences=1
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.short_ngram_size=8
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.max_short_ngram_occurrences=2
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.min_segment_words=10
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.near_duplicate_similarity=0.9
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.near_duplicate_occurrences=3
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.compact_rejected_rows=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.skip_actor_if_none=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.block_tpf_ce_weight.enable=false
+- ++actor_rollout_ref.actor.ulysses_sequence_parallel_size=2
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_all_ce_packing=all_blocks_per_round
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_all_ce_packing_materialization=sparse_pages
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_all_ce_parallelism=hybrid
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_all_ce_underfill_fallback=block_only
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_all_ce_packing_require_multi_block=false
+- ++actor_rollout_ref.actor.fsdp_config.reshard_after_forward=true
+- ++actor_rollout_ref.actor.fsdp_config.seed=20260725
+- ++actor_rollout_ref.actor.fsdp_config.full_determinism=true
+- ++actor_rollout_ref.actor.data_loader_seed=20260725
+- ++data.seed=20260725
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_all_ce_replay_input_mode=exact
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_all_ce_random_seed=20260725
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_all_ce_random_identity=trace_step_key
+- ++actor_rollout_ref.actor.generation_consistency_jsd.response_tpf_top1_filter.enable=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_all_ce_state_selection.enable=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.signed_trace_ce.enable=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.causal_wrong_ce.enable=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.adjacent_entropy_contraction.enable=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.adjacent_entropy_contraction.rho=0.05
+- ++actor_rollout_ref.actor.generation_consistency_jsd.adjacent_entropy_contraction.coef=50
+- ++actor_rollout_ref.actor.generation_consistency_jsd.adjacent_entropy_contraction.response_level=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.adjacent_entropy_contraction.projection_chunk_size=64
+- ++actor_rollout_ref.actor.generation_consistency_jsd.entropy_gated_rkl_probe.enable=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.entropy_gated_rkl.enable=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.entropy_gated_rkl.entropy_threshold=0.10
+- ++actor_rollout_ref.actor.generation_consistency_jsd.entropy_gated_rkl.rkl_cap=5.0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.response_level_ce.enable=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.causal_prob_ce_filter.enable=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.causal_prob_ce_filter.threshold=0.9
+- ++actor_rollout_ref.actor.generation_consistency_jsd.causal_prob_ce_filter.direction=greater_than
+- ++actor_rollout_ref.actor.generation_consistency_jsd.adjacent_entropy_contraction.eps=1e-8
+- ++actor_rollout_ref.actor.generation_consistency_jsd.adjacent_entropy_contraction.scope=unresolved
+- ++actor_rollout_ref.rollout.engine_kwargs.rollout_extra_sampling_params.sampling_seed_base=20260725
+- ++actor_rollout_ref.rollout.engine_kwargs.sglang.paired_seed_base=20260725
+- ++actor_rollout_ref.actor.generation_consistency_jsd.adjacent_entropy_contraction.ceiling=0.20
+- ++actor_rollout_ref.rollout.engine_kwargs.rollout_extra_sampling_params.prob_threshold=0.9
+- ++actor_rollout_ref.rollout.engine_kwargs.rollout_extra_sampling_params.edit_threshold=0.9
+- ++actor_rollout_ref.actor.fsdp_config.optimizer_offload=true
+- ++actor_rollout_ref.actor.fsdp_config.param_offload=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_all_ce_state_selection.fraction=0.25
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_all_ce_state_selection.direction=highest
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_all_ce_state_selection.score=new_accept_count
+- ++actor_rollout_ref.actor.generation_consistency_jsd.entropy_gated_rkl.allow_aec_composition=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_all_ce_packing_max_rounds_per_block=512
+- ++ray_kwargs.ray_init._temp_dir=${RAY_TMP_DIR}
+- ++ray_kwargs.ray_init.num_cpus=64
+- ++ray_kwargs.ray_init.num_gpus=8
+- ++ray_kwargs.ray_init.object_store_memory=150000000000
+- ++ray_kwargs.ray_init.include_dashboard=false
+- ++custom_reward_function.name=compute_score_lenient
+- ++reward.custom_reward_function.name=compute_score_lenient

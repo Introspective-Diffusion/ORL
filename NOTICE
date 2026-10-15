@@ -1,0 +1,90 @@
+ORL training and evaluation code
+Copyright (c) 2026 The ORL Authors
+
+This repository is released under the MIT License (see LICENSE), except for the
+third-party components listed below, which keep their own licenses. The source
+commits of every imported training component, and the changes made to it, are
+listed in training/PROVENANCE.md; those of the evaluation components in
+evaluation/COMMIT_SOURCES.txt.
+
+training/verl/
+    Fork of VERL (https://github.com/volcengine/verl), with modifications.
+    Apache License 2.0, Copyright 2023-2024 Bytedance Ltd. and/or its affiliates.
+    See training/verl/LICENSE and training/verl/Notice.txt.
+
+training/sglang/
+    Fork of SGLang (https://github.com/sgl-project/sglang), with modifications.
+    Apache License 2.0, Copyright 2023-2024 SGLang Team. See training/sglang/LICENSE.
+
+training/sglang_dgemma/
+    SGLang (https://github.com/sgl-project/sglang) at commit 11ffa55, with
+    modifications. Apache License 2.0, Copyright 2023-2024 SGLang Team.
+    See training/sglang_dgemma/LICENSE.
+
+training/kernels/fast-diffusion-attention/
+    MIT License, Copyright (c) 2026 The ORL Authors.
+    See training/kernels/fast-diffusion-attention/LICENSE.
+
+training/overlays/sdar/
+    SDAR / Qwen3 modeling code, with modifications. Apache License 2.0,
+    Copyright 2025 The Qwen team, Alibaba Group and the HuggingFace Inc. team.
+    fused_linear_diffusion_cross_entropy.py is adapted from flash-linear-attention
+    (https://github.com/fla-org/flash-linear-attention, MIT License) and
+    Liger-Kernel (https://github.com/linkedin/Liger-Kernel, BSD 2-Clause License).
+
+training/verl/verl/workers/rollout/diffusion_rollout/jetengine_ext/
+    Derived from JetEngine (https://github.com/Labman42/JetEngine, MIT License),
+    which builds on nano-vllm (https://github.com/GeeeekExplorer/nano-vllm,
+    MIT License).
+
+training/verl/verl/utils/reward_score/my_reward.py
+    From dLLM-RL (https://github.com/Gen-Verse/dLLM-RL), Apache License 2.0; the
+    training-round expansion in training/verl/verl/trainer/ppo/ray_trainer.py
+    follows its collect_training_data.
+
+training/overlays/llada2/
+    LLaDA2 modeling code, with modifications. Apache License 2.0,
+    Copyright 2025 Antgroup and the HuggingFace Inc. team.
+
+training/overlays/diffusion_gemma/transformers/
+    DiffusionGemma model code from Hugging Face Transformers, with modifications.
+    Apache License 2.0, Copyright 2026 the HuggingFace Team.
+
+offline/llama_factory_sdar/
+    LLaMA-Factory (https://github.com/hiyouga/LLaMA-Factory) 0.9.4.dev0, with
+    modifications. Apache License 2.0, Copyright 2025 the LlamaFactory team.
+    See offline/llama_factory_sdar/LICENSE.
+
+evaluation/inference/sglang/
+    Derived from SGLang (https://github.com/sgl-project/sglang), with
+    modifications; evaluation/runtime/sglang/sdar-engine.patch is the SDAR engine
+    patch applied on top, and evaluation/runtime/sglang/source_manifest.json
+    records the source revisions. Apache License 2.0, Copyright 2023-2024 SGLang
+    Team. See evaluation/third_party/sglang-LICENSE.
+
+evaluation/inference/vllm/patches/
+    Patches applied to vLLM (https://github.com/vllm-project/vllm) inside the
+    evaluation images. vLLM is licensed under the Apache License 2.0.
+
+evaluation/kernels/fast-diffusion-attention/
+    MIT License, Copyright (c) 2026 The ORL Authors.
+    See evaluation/kernels/fast-diffusion-attention/LICENSE.
+
+evaluation/runtime/scoring/sources/lcb_lib/
+    LiveCodeBench's code-generation test harness
+    (https://github.com/LiveCodeBench/LiveCodeBench, MIT License) as packaged in
+    OpenCompass (https://github.com/open-compass/opencompass, Apache License 2.0),
+    copied unchanged from I-DLM (https://github.com/Introspective-Diffusion/I-DLM,
+    BSD 3-Clause License) at commit 78ca8a4.
+
+evaluation/runtime/scoring/wheels/
+    Wheels of tempdir 0.7.1 (MIT License, Copyright Thomas Fenzl) and wget 3.2
+    (public domain, anatoly techtonik), as recorded in the scoring environment.
+
+evaluation/inputs/
+    Benchmark data from GSM8K (MIT), MATH-500 (MIT), HumanEval (MIT), MBPP
+    (Apache-2.0), MMLU-Pro (MIT, Copyright TIGER-Lab) and IFEval (Apache-2.0,
+    Copyright Google LLC); see evaluation/inputs/README.md.
+
+Model weights and the training datasets are not part of this repository and are
+subject to their own licenses and terms of use.

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "suite": "main",
+  "status": "Experiment matrix of the paper's main table; a plan, not a launcher (scripts/main_table.sh runs its cells)",
+  "models": ["qwen-dlm-base", "qwen-dlm-orl", "llada-base", "llada-orl", "dg-base", "dg-orl"],
+  "benchmarks": {"gsm8k": {"n": 1319}, "math500": {"n": 500}, "humaneval": {"n": 164}, "mbpp": {"n": 427, "variant": "canonical427_not_378_or_500"}},
+  "seeds_by_family": {"qwen-dlm": [1234], "llada": [12345], "dg": [1234, 1235, 1236]},
+  "partition_by_family": {"qwen-dlm": {"count": 8, "kind": "contiguous_balanced"}, "llada": {"count": 4, "kind": "modulo"}, "dg": {"count": 4, "kind": "modulo"}},
+  "worker_grouping": "QwenDLM: model/benchmark/seed/shard; LLaDA/DG: model/seed/shard shared engine across four benchmarks",
+  "worker_order_by_family": {"qwen-dlm": ["gsm8k", "math500", "humaneval", "mbpp"], "llada": ["gsm8k", "humaneval", "mbpp", "math500"], "dg": ["gsm8k", "humaneval", "mbpp", "math500"]},
+  "scoring": {"gsm8k": "family-specific original parser; length incorrect", "math500": "family-specific original math verifier", "humaneval": "QwenDLM historical CodeTACO; LLaDA/DG EvalPlus0.3.1 base tests", "mbpp": "canonical CodeTACO multi-candidate427; isolated execution only", "accuracy_denominator": "all tasks including length failures", "tpf": "mean completion_tokens/denoise_forwards on non-length responses", "seed_aggregation": "equal run means; sample SD for repeated seeds"},
+  "scorer_pins": {"math_verify": "0.8.0", "sympy": "1.14.0", "evalplus": "0.3.1", "humaneval_plus_data_version": "0.1.10", "humaneval_plus_data_sha256": "42526ec0e7d5f3ee0b06d6ced98f8c8bae3d76519151bfb3d36f79010645bd7f", "qwen_dlm_benchmarks_sha256": "5240fa8858b6890b81dd94014515d2bff9366d32aed4b3cf8922c20ba8b9a72a", "code_taco_reward_sha256": "b1681c441f27d187108261144d8c8a9e8637e3ff65c8eb2ea20f1b597d5bb581", "mbpp427_scorer_sha256": "8e2d2aae72e626bcea731f6c86cf83c5258089019a48f597b32cc3b0baed0bab"},
+  "expected": {"generation_runs": 40, "scored_run_cells": 40, "displayed_cells": 24, "benchmark_shards": 192, "worker_groups": 96, "generated_rows": 24100},
+  "assets_env": "PAPER_MAIN_INPUTS_ROOT"
+}

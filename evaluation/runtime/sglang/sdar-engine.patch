@@ -1,0 +1,2297 @@
+diff --git a/inference/sglang/sglang/srt/dllm/algorithm/fused_commit_graph.py b/inference/sglang/sglang/srt/dllm/algorithm/fused_commit_graph.py
+new file mode 100644
+index 00000000..e8993aec
+--- /dev/null
++++ b/inference/sglang/sglang/srt/dllm/algorithm/fused_commit_graph.py
+@@ -0,0 +1,437 @@
++"""Exact CUDA-graph replay of the SDARPrefixKV commit forward (commit_mode=causal).
++
++The commit pass re-runs the finished block (block_size clean tokens, causal
++within the block, full prefix K/V) once per block to write the final K/V and
++the boundary logits of the next block. It goes through the generic extend path
++of the flashinfer backend (ragged wrapper over the block + paged wrapper over
++the prefix + merge_state) and was forced eager (disable_cuda_graph_once), which
++costs ~16 ms per block on H100 for a 4B model against ~7.5 ms of GPU work.
++
++This module captures that eager forward (bs=1, extend == block_size) with two
++DEDICATED flashinfer wrappers in the SAME (non-cuda-graph) mode the eager path
++uses, so plan + kernels are identical to eager. Every block re-plans both
++wrappers on the host through the backend's own init_forward_metadata (the plan
++writes indptr/indices into the backend's stable device buffers and the int
++workspace the captured kernels read by pointer), copies the block inputs into
++the static tensors and replays. flashinfer's host-side plan_info (baked into
++the captured launches) changes with the kv length only for very short
++prefixes, so graphs are cached per (paged, ragged) plan_info signature; a new
++signature triggers a new capture. Every capture compares replay vs eager
++bitwise (logits + K/V of the block slots) and disables itself on mismatch.
++Note: cuda-graph-mode wrappers were tried first and compute a DIFFERENT (wrong)
++attention for this ragged+paged commit pass (flashinfer 0.6.12) -- do not use.
++
++SDAR_COMMIT_GRAPH=1 (default) enables it (SDARPrefixKV._run_impl commit branch); 0 restores the eager commit.
++SDAR_COMMIT_GRAPH_MAX_KV is a FLOOR for the prefill updater's kv_indices scratch capacity; the effective
++capacity is max(floor, context_len + 256 + block_size) so the eager updater (needed = paged_len + 256,
++flashinfer_backend.call_begin_forward) never reallocates the scratch the captured kernels point at. If it
++ever does move, run() detects the new data_ptr before replaying, retires the whole graph generation
++(graphs + private pool + cached output) and recaptures on the current buffer.
++"""
++
++from __future__ import annotations
++
++import dataclasses
++import logging
++import os
++import time
++from typing import Any
++
++import torch
++
++logger = logging.getLogger(__name__)
++
++_ENABLED = os.environ.get("SDAR_COMMIT_GRAPH", "1") == "1"
++# floor for the capacity (tokens) of the prefill updater's kv_indices scratch
++# that the captured kernels hold by pointer. The effective capacity is
++# max(this, context_len + 256 (the updater's slack) + block_size) so the eager
++# updater never has to reallocate the scratch for any forward the server can
++# issue (a reallocation would leave every captured graph with a dangling
++# pointer -> illegal memory access on the next replay; seen at the 32k protocol
++# with the old fixed 32768 cap).
++_MAX_KV = int(os.environ.get("SDAR_COMMIT_GRAPH_MAX_KV", "32768") or 32768)
++# debug: after every replay also run the eager commit and compare logits + K/V
++_CHECK_EVERY = os.environ.get("SDAR_COMMIT_GRAPH_CHECK", "0") == "1"
++
++
++@dataclasses.dataclass
++class _Result:
++    logits_output: Any
++    graph_was_replayed: bool = True
++    graph_replay_miss_reason: str | None = None
++    can_run_graph: bool = True
++
++
++class ExactCommitGraphs:
++    def __init__(self, block_size: int, check_layers: int = 3):
++        self.block_size = int(block_size)
++        self.graphs: dict[tuple, dict] = {}  # plan signature -> {graph, out}
++        self.fb_static = None
++        self.wrappers = None  # (ragged, paged_list) dedicated wrappers, eager mode
++        self.pool = None
++        self.stream = None
++        self.disabled = not _ENABLED
++        self.disabled_reason: str | None = None
++        self.check_layers = check_layers
++        self.stats = {"replays": 0, "captures": 0, "capture_s": 0.0, "scratch_moved": 0}
++        # capacity (tokens) of the updater's kv_indices scratch and its pointer at
++        # the time the graphs were captured (see _make_wrappers / _scratch_ok)
++        self._kv_cap: int | None = None
++        self._kv_buf_ptr: int | None = None
++
++    # ------------------------------------------------------------------
++    def applicable(self, forward_batch, trace: bool) -> bool:
++        if self.disabled or trace:
++            return False
++        if int(forward_batch.batch_size) != 1:
++            return False
++        if getattr(forward_batch, "input_embeds", None) is not None:
++            return False
++        if not forward_batch.forward_mode.is_dllm_extend():
++            return False
++        if not getattr(forward_batch, "dllm_is_commit", False):
++            return False
++        if not getattr(forward_batch, "dllm_force_causal", False):
++            return False
++        if getattr(forward_batch, "dllm_is_denoise", False):
++            return False
++        if int(forward_batch.input_ids.numel()) != self.block_size:
++            return False
++        pre = forward_batch.extend_prefix_lens_cpu
++        if not pre or int(pre[0]) <= 0:
++            return False
++        cap = self._kv_cap
++        if cap is None:  # wrappers not built yet: same formula _make_wrappers will use
++            be = getattr(forward_batch, "attn_backend", None)
++            ctx = int(getattr(be, "max_context_len", 0) or 0)
++            cap = max(_MAX_KV, ctx + 256 + self.block_size) if ctx else _MAX_KV
++        # the commit plan is ragged: the updater needs prefix + 256 = seq - block + 256 entries
++        if int(forward_batch.seq_lens_sum) - self.block_size + 256 > cap:
++            return False
++        if not forward_batch.input_ids.is_cuda:
++            return False
++        return True
++
++    # ------------------------------------------------------------------
++    def _signature(self):
++        ragged, paged = self.wrappers
++        return (tuple(int(x) for x in ragged._plan_info),) + tuple(
++            tuple(int(x) for x in w._plan_info) for w in paged
++        )
++
++    def run(self, model_runner, forward_batch):
++        """Replay (capture on first sight of a plan signature). None when disabled."""
++        try:
++            if self.fb_static is None:
++                self.fb_static = self._make_static(forward_batch)
++                self._ensure_wrappers(model_runner, forward_batch.input_ids.device)
++            self._sync_static(self.fb_static, forward_batch)
++            self._plan(model_runner, self.fb_static)
++            sig = self._signature()
++        except Exception as exc:  # noqa: BLE001
++            self._disable(f"plan failed: {exc!r}")
++            return None
++        old_ptr, old_cap, n_graphs = self._kv_buf_ptr, self._kv_cap, len(self.graphs)
++        if not self._scratch_ok(model_runner):
++            # the updater's kv_indices scratch was reallocated since capture: every
++            # captured launch points at freed memory. Retire the whole generation --
++            # the graphs, the private graph pool they were captured into and the cached
++            # output that pins a segment of that pool (a fresh pool is created by the
++            # next _capture; reusing the old handle after its graphs are gone trips
++            # torch's create_or_incref_pool use_count assert) -- and recapture on the
++            # current buffer (bitwise-checked like any first capture).
++            self.graphs.clear()
++            self.out_static = None
++            self.pool = None
++            self.stats["scratch_moved"] += 1
++            msg = (
++                "[SDAR-EXACT-COMMIT] kv_indices scratch moved ptr %s->%s cap %s->%s; dropped %d graphs, recapturing"
++                % (old_ptr, self._kv_buf_ptr, old_cap, self._kv_cap, n_graphs)
++            )
++            logger.warning(msg)
++            print(msg, flush=True)
++        entry = self.graphs.get(sig)
++        if entry is None:
++            try:
++                return self._capture(model_runner, forward_batch, sig)
++            except Exception as exc:  # noqa: BLE001
++                self._disable(f"capture failed: {exc!r}")
++                return None
++        entry["graph"].replay()
++        self.out_static = entry["out"]
++        self.stats["replays"] += 1
++        if _CHECK_EVERY:
++            torch.cuda.synchronize()
++            rep_logits = self.out_static.full_logits.clone()
++            rep_kv = self._snapshot_kv(model_runner, forward_batch.out_cache_loc)
++            # (a) eager with the DEDICATED wrappers (plan on forward_batch + forward)
++            saved_w = self._swap_in(model_runner)
++            try:
++                model_runner.attn_backend.init_forward_metadata(forward_batch)
++                out_ded = model_runner.forward(forward_batch, skip_attn_backend_init=True)
++                torch.cuda.synchronize()
++                ded_logits = out_ded.logits_output.full_logits.clone()
++                ded_kv = self._snapshot_kv(model_runner, forward_batch.out_cache_loc)
++                del out_ded
++            finally:
++                self._swap_out(model_runner, saved_w)
++            # (b) eager with the backend's normal wrappers (reference)
++            model_runner.attn_backend.init_forward_metadata(forward_batch)
++            out = model_runner.forward(forward_batch, skip_attn_backend_init=True)
++            torch.cuda.synchronize()
++            eag_kv = self._snapshot_kv(model_runner, forward_batch.out_cache_loc)
++            d_ded = (rep_logits.float() - ded_logits.float()).abs().max().item()
++            d_ded_eag = (ded_logits.float() - out.logits_output.full_logits.float()).abs().max().item()
++            print(
++                "[SDAR-EXACT-COMMIT-CHECK] replay vs eager-dedicated max|d|=%.3e ; eager-dedicated vs eager-original max|d|=%.3e ; kv(ded vs orig) L1 K%.2e"
++                % (d_ded, d_ded_eag, (ded_kv[1][0].float() - eag_kv[1][0].float()).abs().max().item() if len(ded_kv) > 1 else -1.0),
++                flush=True,
++            )
++            d = (rep_logits.float() - out.logits_output.full_logits.float()).abs()
++            kvd = " ".join(
++                "L%d K%.2e V%.2e" % (i, (a[0].float() - b[0].float()).abs().max().item(), (a[1].float() - b[1].float()).abs().max().item())
++                for i, (a, b) in enumerate(zip(rep_kv, eag_kv))
++            )
++            print(
++                "[SDAR-EXACT-COMMIT-CHECK] replay#%d prefix=%d logits max|d|=%.3e rows_diff=%d/%d | kv: %s | static ids==new: %s pos==: %s loc==: %s"
++                % (
++                    self.stats["replays"], int(forward_batch.extend_prefix_lens_cpu[0]), d.max().item(),
++                    int((d.max(dim=-1).values > 0).sum().item()), d.shape[0], kvd,
++                    bool(torch.equal(self.fb_static.input_ids, forward_batch.input_ids)),
++                    bool(torch.equal(self.fb_static.positions, forward_batch.positions)),
++                    bool(torch.equal(self.fb_static.out_cache_loc, forward_batch.out_cache_loc)),
++                ),
++                flush=True,
++            )
++            return _Result(logits_output=out.logits_output, graph_was_replayed=False)
++        return _Result(logits_output=self.out_static)
++
++    # ------------------------------------------------------------------
++    @staticmethod
++    def _sync_static(fb_static, fb):
++        fb_static.input_ids.copy_(fb.input_ids)
++        fb_static.positions.copy_(fb.positions)
++        fb_static.out_cache_loc.copy_(fb.out_cache_loc)
++        fb_static.req_pool_indices.copy_(fb.req_pool_indices)
++        fb_static.seq_lens.copy_(fb.seq_lens)
++        if fb.extend_prefix_lens is not None:
++            fb_static.extend_prefix_lens.copy_(fb.extend_prefix_lens)
++        if fb.extend_seq_lens is not None:
++            fb_static.extend_seq_lens.copy_(fb.extend_seq_lens)
++        if fb.extend_start_loc is not None and fb_static.extend_start_loc is not None:
++            fb_static.extend_start_loc.copy_(fb.extend_start_loc)
++        if fb.seq_lens_cpu is not None:
++            if fb_static.seq_lens_cpu is None or fb_static.seq_lens_cpu.shape != fb.seq_lens_cpu.shape:
++                fb_static.seq_lens_cpu = fb.seq_lens_cpu.clone()
++            else:
++                fb_static.seq_lens_cpu.copy_(fb.seq_lens_cpu)
++        fb_static.seq_lens_sum = int(fb.seq_lens_sum)
++        fb_static.extend_num_tokens = fb.extend_num_tokens
++        fb_static.extend_prefix_lens_cpu = list(fb.extend_prefix_lens_cpu) if fb.extend_prefix_lens_cpu is not None else None
++        fb_static.extend_seq_lens_cpu = list(fb.extend_seq_lens_cpu) if fb.extend_seq_lens_cpu is not None else None
++        if getattr(fb, "orig_seq_lens", None) is not None and getattr(fb_static, "orig_seq_lens", None) is not None:
++            fb_static.orig_seq_lens.copy_(fb.orig_seq_lens)
++
++    def _swap_in(self, model_runner):
++        be = model_runner.attn_backend
++        upd = be.indices_updater_prefill
++        ragged, paged = self.wrappers
++        saved = (be.prefill_wrapper_ragged, upd.prefill_wrapper_ragged, be.prefill_wrappers_paged)
++        be.prefill_wrapper_ragged = ragged
++        upd.prefill_wrapper_ragged = ragged
++        be.prefill_wrappers_paged = paged
++        return saved
++
++    @staticmethod
++    def _swap_out(model_runner, saved):
++        be = model_runner.attn_backend
++        upd = be.indices_updater_prefill
++        be.prefill_wrapper_ragged, upd.prefill_wrapper_ragged, be.prefill_wrappers_paged = saved
++
++    def _plan(self, model_runner, fb_static):
++        """Host-side flashinfer plan of the dedicated wrappers for this block's
++        prefix through the backend's normal extend metadata path (the wrappers
++        are swapped in only for the plan; the captured kernels hold them)."""
++        saved = self._swap_in(model_runner)
++        try:
++            model_runner.attn_backend.init_forward_metadata(fb_static)
++            self._metadata = model_runner.attn_backend.forward_metadata
++        finally:
++            self._swap_out(model_runner, saved)
++
++    def _snapshot_kv(self, model_runner, loc):
++        pool = model_runner.token_to_kv_pool
++        L = model_runner.model_config.num_hidden_layers
++        layers = sorted({0, L // 2, L - 1})[: self.check_layers]
++        return [
++            (pool.get_key_buffer(l)[loc].clone(), pool.get_value_buffer(l)[loc].clone())
++            for l in layers
++        ]
++
++    def _make_wrappers(self, model_runner, device):
++        from flashinfer import (
++            BatchPrefillWithPagedKVCacheWrapper,
++            BatchPrefillWithRaggedKVCacheWrapper,
++        )
++
++        be = model_runner.attn_backend
++        ws = be.workspace_buffer  # scratch; stream-ordered use only
++        # eager-mode wrappers with the SAME backends as the backend's own (the
++        # ragged wrapper is built with fmha "auto" -> FA3 on Hopper, the paged
++        # ones with prefill_backend; mixing them changes the attention numerics)
++        ragged_backend = getattr(be.prefill_wrapper_ragged, "_backend", None) or "auto"
++        paged_backend = getattr(be.prefill_wrappers_paged[0], "_backend", None) or getattr(
++            be, "prefill_backend", "auto"
++        ) or "auto"
++        ragged = BatchPrefillWithRaggedKVCacheWrapper(ws, "NHD", backend=ragged_backend)
++        paged = [
++            BatchPrefillWithPagedKVCacheWrapper(ws, "NHD", backend=paged_backend)
++            for _ in range(int(be.num_wrappers))
++        ]
++        print("[SDAR-EXACT-COMMIT] wrappers ragged=%s paged=%s" % (ragged_backend, paged_backend), flush=True)
++        # the updater's kv_indices scratch must never be reallocated (the captured
++        # kernels hold its pointer): pre-grow it once to cover every forward the
++        # server can issue. The eager updater needs paged_len + 256 entries and
++        # reallocates when short; the ragged commit plan has paged_len = prefix
++        # <= context_len, the paged denoise plan has paged_len = seq_len, which the
++        # dLLM scheduler lets overshoot context_len by < block_size on the last
++        # block. context_len + 256 + block_size (or the env floor, whichever is
++        # larger) therefore covers both; the runtime pointer check in run() covers
++        # anything else.
++        upd = be.indices_updater_prefill
++        ctx = int(getattr(be, "max_context_len", 0) or 0)
++        cap = max(_MAX_KV, ctx + 256 + self.block_size)
++        buf = getattr(upd, "_kv_indices_buf", None)
++        if buf is None or buf.shape[0] < cap:
++            upd._kv_indices_buf = torch.zeros((cap,), dtype=torch.int32, device=device)
++        self._kv_cap = int(upd._kv_indices_buf.shape[0])
++        self._kv_buf_ptr = int(upd._kv_indices_buf.data_ptr())
++        print(
++            "[SDAR-EXACT-COMMIT] kv_indices scratch capacity=%d (context_len=%d, env floor=%d)"
++            % (self._kv_cap, ctx, _MAX_KV),
++            flush=True,
++        )
++        return ragged, paged
++
++    def _scratch_ok(self, model_runner) -> bool:
++        """True when the updater's kv_indices scratch is still the buffer the
++        captured graphs were recorded against; refreshes the recorded pointer
++        and capacity otherwise so the next capture is consistent."""
++        upd = model_runner.attn_backend.indices_updater_prefill
++        buf = getattr(upd, "_kv_indices_buf", None)
++        if buf is None:
++            self._kv_buf_ptr = None
++            self._kv_cap = None
++            return False
++        ptr = int(buf.data_ptr())
++        if ptr == self._kv_buf_ptr and int(buf.shape[0]) == self._kv_cap:
++            return True
++        self._kv_buf_ptr = ptr
++        self._kv_cap = int(buf.shape[0])
++        return False
++
++    def _ensure_wrappers(self, model_runner, device):
++        if self.wrappers is None:
++            self.wrappers = self._make_wrappers(model_runner, device)
++
++    def _make_static(self, forward_batch):
++        fb = dataclasses.replace(
++            forward_batch,
++            input_ids=forward_batch.input_ids.clone(),
++            positions=forward_batch.positions.clone(),
++            out_cache_loc=forward_batch.out_cache_loc.clone(),
++            req_pool_indices=forward_batch.req_pool_indices.clone(),
++            seq_lens=forward_batch.seq_lens.clone(),
++            extend_prefix_lens=(
++                forward_batch.extend_prefix_lens.clone()
++                if forward_batch.extend_prefix_lens is not None else None
++            ),
++            extend_seq_lens=(
++                forward_batch.extend_seq_lens.clone()
++                if forward_batch.extend_seq_lens is not None else None
++            ),
++            extend_start_loc=(
++                forward_batch.extend_start_loc.clone()
++                if forward_batch.extend_start_loc is not None else None
++            ),
++        )
++        if forward_batch.seq_lens_cpu is not None:
++            fb.seq_lens_cpu = forward_batch.seq_lens_cpu.clone()
++        if getattr(forward_batch, "orig_seq_lens", None) is not None:
++            fb.orig_seq_lens = forward_batch.orig_seq_lens.clone()
++        fb.return_logprob = False
++        fb.disable_cuda_graph_once = True  # eager model_runner.forward inside the capture
++        return fb
++
++    def _capture(self, model_runner, forward_batch, sig):
++        t0 = time.perf_counter()
++        fb = self.fb_static  # synced + planned for this block by run()
++
++        # eager reference + capture with the dedicated wrappers in place
++        be = model_runner.attn_backend
++        saved_md = be.forward_metadata
++        saved_w = self._swap_in(model_runner)
++        try:
++            be.init_forward_metadata(fb)
++            self._metadata = be.forward_metadata
++            out_ref = model_runner.forward(fb, skip_attn_backend_init=True)
++            ref_logits = out_ref.logits_output.full_logits.clone()
++            del out_ref
++            torch.cuda.synchronize()
++            ref_kv = self._snapshot_kv(model_runner, fb.out_cache_loc)
++
++            if self.pool is None:
++                self.pool = torch.cuda.graph_pool_handle()
++            if self.stream is None:
++                self.stream = torch.cuda.Stream()
++            graph = torch.cuda.CUDAGraph()
++            stream = self.stream
++            stream.wait_stream(torch.cuda.current_stream())
++            with torch.cuda.stream(stream):
++                with torch.cuda.graph(graph, pool=self.pool, stream=stream):
++                    out_static = model_runner.forward(fb, skip_attn_backend_init=True)
++            torch.cuda.current_stream().wait_stream(stream)
++            torch.cuda.synchronize()
++
++            # bitwise check: replay must reproduce the eager forward
++            graph.replay()
++            torch.cuda.synchronize()
++            same = bool(torch.equal(out_static.logits_output.full_logits, ref_logits))
++            kv_now = self._snapshot_kv(model_runner, fb.out_cache_loc)
++            for (k0, v0), (k1, v1) in zip(ref_kv, kv_now):
++                same = same and bool(torch.equal(k0, k1)) and bool(torch.equal(v0, v1))
++        finally:
++            self._swap_out(model_runner, saved_w)
++            be.forward_metadata = saved_md
++        if not same:
++            self._disable("replay not bitwise equal to eager commit forward")
++            # K/V slots hold the replayed values; rerun eager to leave the cache exact
++            model_runner.attn_backend.init_forward_metadata(forward_batch)
++            out = model_runner.forward(forward_batch, skip_attn_backend_init=True)
++            return _Result(
++                logits_output=out.logits_output, graph_was_replayed=False,
++                graph_replay_miss_reason="exact_commit_mismatch", can_run_graph=False,
++            )
++        self.graphs[sig] = {"graph": graph, "out": out_static.logits_output}
++        self.out_static = out_static.logits_output
++        # record the scratch the captured launches actually point at
++        upd = model_runner.attn_backend.indices_updater_prefill
++        buf = getattr(upd, "_kv_indices_buf", None)
++        if buf is not None:
++            self._kv_buf_ptr = int(buf.data_ptr())
++            self._kv_cap = int(buf.shape[0])
++        dt = time.perf_counter() - t0
++        self.stats["captures"] += 1
++        self.stats["capture_s"] += dt
++        msg = "[SDAR-EXACT-COMMIT] captured commit graph #%d (block=%d, prefix=%d, %.2fs, bitwise ok)" % (
++            len(self.graphs), self.block_size, int(fb.extend_prefix_lens_cpu[0]), dt)
++        logger.info(msg)
++        print(msg, flush=True)
++        return _Result(logits_output=self.out_static)
++
++    def _disable(self, reason: str):
++        self.disabled = True
++        self.disabled_reason = reason
++        msg = f"[SDAR-EXACT-COMMIT] disabled: {reason}"
++        logger.warning(msg)
++        print(msg, flush=True)
+diff --git a/inference/sglang/sglang/srt/dllm/algorithm/fused_post_graph.py b/inference/sglang/sglang/srt/dllm/algorithm/fused_post_graph.py
+new file mode 100644
+index 00000000..812870ec
+--- /dev/null
++++ b/inference/sglang/sglang/srt/dllm/algorithm/fused_post_graph.py
+@@ -0,0 +1,236 @@
++"""Exact CUDA-graph replay of the SDARPrefixKV per-step post-processing.
++
++After every denoise forward the fixed-shape step (SDAR_FIXED_SHAPE_STEP) runs
++~50 small launches: fused row stats (argmax / confidence / entropy at the
++step's confidence temperature), the fixed-shape entropy-bound accept mask, the
++edit mask, the (done, changed) status copy, the where-updates of the block ids
++and per-position probabilities, the accept/edit counters and the next step's
++random-vocab noise. All shapes are static and the logits live in the graph
++runner's static output buffer, so the whole chain is captured once per logits
++buffer and replayed. Same kernels, same values (the per-step temperature and
++the step counter are device scalars advanced inside the graph; the confidence
++temperature table is precomputed with the same float rounding as the eager
++path).
++
++State mirrors (ids / accepted / prompt / q_probs / q_sample_logprobs / counters)
++live in static buffers for the duration of a block; the caller copies the ids
++back into the ForwardBatch view after each step.
++
++SDAR_POST_GRAPH=1 enables it (default on with SDAR_FUSED_ROW_STATS=1).
++"""
++
++from __future__ import annotations
++
++import logging
++import os
++import time
++
++import torch
++
++logger = logging.getLogger(__name__)
++
++_ENABLED = os.environ.get("SDAR_POST_GRAPH", "1") == "1"
++# SDAR_POST_FUSED_TAIL=1 (default): after sort/cumsum, run the accept scatter, edit
++# mask, status, updates, counters and next-step noise as ONE Triton kernel
++# (fused_step_kernels.post_step_fused) instead of ~35 torch launches; integer /
++# boolean / comparison arithmetic only, so the values are identical.
++_FUSED_TAIL = os.environ.get("SDAR_POST_FUSED_TAIL", "1") == "1"
++
++
++class ExactPostStepGraphs:
++    def __init__(self, algo, block_size: int, vocab: int, device, ids_dtype):
++        self.algo = algo
++        self.n = int(block_size)
++        self.disabled = not _ENABLED
++        self.disabled_reason = None
++        self.graphs: dict[int, dict] = {}
++        self.pool = None
++        self.stream = None
++        self.stats = {"replays": 0, "captures": 0}
++        n = self.n
++        f32 = torch.float32
++        self.ids = torch.zeros((n,), dtype=ids_dtype, device=device)
++        self.accepted = torch.zeros((n,), dtype=torch.bool, device=device)
++        self.prompt = torch.zeros((n,), dtype=torch.bool, device=device)
++        self.q_probs = torch.full((n,), float("nan"), dtype=f32, device=device)
++        self.q_slp = torch.full((n,), float("nan"), dtype=f32, device=device)
++        self.counts = torch.zeros((2,), dtype=torch.int64, device=device)
++        self.boundary = torch.zeros((vocab,), dtype=f32, device=device)
++        self.step_t = torch.zeros((), dtype=torch.int64, device=device)  # denoise step counter
++        self.block_t = torch.zeros((), dtype=torch.int64, device=device)
++        self.positions = torch.arange(n, device=device)
++        self.status_dev = torch.zeros((2,), dtype=torch.bool, device=device)
++        self.acc_tmp = torch.zeros((n,), dtype=torch.int8, device=device)
++        self.status_pinned = torch.empty((2,), dtype=torch.bool, pin_memory=True)
++        self.event = torch.cuda.Event()
++        # confidence temperature table: step (1-based) -> fp32(1/T_step), same
++        # rounding as the eager path (python float 1/T -> fp32 kernel arg)
++        max_steps = int(algo.max_steps_per_block) + 2
++        inv = []
++        for step in range(0, max_steps + 1):
++            step_capped = min(max(step, 1), int(algo.max_steps_per_block))
++            if algo.confidence_temperature_mode == "step_linear":
++                T = max(
++                    algo.confidence_temperature_min,
++                    algo.confidence_temperature_max
++                    - algo.confidence_temperature_step_decrement * float(max(step_capped - 1, 0)),
++                )
++            else:
++                T = float(algo.confidence_temperature)
++            inv.append(1.0 / max(float(T), 1e-6))
++        self.inv_t_table = torch.tensor(inv, dtype=torch.float32, device=device)
++        self._ids_dtype = ids_dtype
++
++    # ------------------------------------------------------------------
++    def begin_block(self, block_input_ids, accepted_mask, prompt_mask, block_idx: int):
++        self.ids.copy_(block_input_ids)
++        self.accepted.copy_(accepted_mask)
++        self.prompt.copy_(prompt_mask)
++        self.q_probs.fill_(float("nan"))
++        self.q_slp.fill_(float("nan"))
++        self.counts.zero_()
++        self.step_t.zero_()
++        self.block_t.fill_(int(block_idx))
++
++    def step(self, raw_logits, boundary):
++        """One post-processing step. Returns (done, changed) after the single sync."""
++        key = int(raw_logits.data_ptr())
++        entry = self.graphs.get(key)
++        self.boundary.copy_(boundary)
++        if entry is None:
++            entry = self._capture(key, raw_logits)
++            if entry is None:
++                return None
++        else:
++            entry["graph"].replay()
++        self.event.record()
++        self.stats["replays"] += 1
++        self.event.synchronize()
++        done, changed = self.status_pinned.tolist()
++        return bool(done), bool(changed)
++
++    # ------------------------------------------------------------------
++    def _body(self, raw_logits):
++        from sglang.srt.dllm.algorithm.fused_step_kernels import row_stats_temp_dev
++
++        algo = self.algo
++        step_now = self.step_t + 1  # this step's 1-based index
++        # index_select (not tensor[idx]: a 0-dim index would be read back to the
++        # host, which is illegal during graph capture)
++        inv_t = torch.index_select(
++            self.inv_t_table, 0, step_now.clamp(max=self.inv_t_table.numel() - 1).view(1)
++        )
++        pb, cb, eb, _ = row_stats_temp_dev(self.boundary.unsqueeze(0), inv_t)
++        pr, cr, er, _ = row_stats_temp_dev(raw_logits[:-1], inv_t)
++        proposal = torch.cat([pb, pr])
++        proposal_probs = torch.cat([cb, cr])
++        entropy = torch.cat([eb, er])
++        sample_logprobs = proposal_probs.clamp_min(torch.finfo(proposal_probs.dtype).tiny).log()
++        if _FUSED_TAIL and algo.noise_mode == "random_vocab" and self._ids_dtype in (torch.int32, torch.int64):
++            from sglang.srt.dllm.algorithm.fused_step_kernels import post_step_fused
++
++            unresolved = (~self.accepted) & (~self.prompt)
++            masked = torch.where(unresolved, entropy, float("inf"))
++            sorted_entropy, order = torch.sort(masked, descending=False)
++            excl = torch.cumsum(sorted_entropy, dim=-1) - sorted_entropy
++            post_step_fused(
++                order, sorted_entropy, excl, self.acc_tmp, self.accepted, self.prompt, self.ids,
++                proposal, proposal_probs, sample_logprobs, self.q_probs, self.q_slp,
++                self.counts, self.status_dev, self.step_t, self.block_t,
++                algo.entropy_bound, algo.edit_threshold, int(algo.randtok_seed), int(algo.random_token_high),
++                bool(algo.force_accept_leftmost),
++            )
++            self.status_pinned.copy_(self.status_dev, non_blocking=True)
++            return
++        proposal_cast = proposal.to(self._ids_dtype)
++        unresolved = (~self.accepted) & (~self.prompt)
++        accept = algo._build_accept_mask_fixed(unresolved, entropy)
++        edit = (
++            self.accepted
++            & (~self.prompt)
++            & (proposal_probs > algo.edit_threshold)
++            & (proposal_cast != self.ids)
++        )
++        accepted_new = self.accepted | accept
++        status = torch.stack([accepted_new.all(), accept.any() | edit.any()])
++        self.status_dev.copy_(status)
++        self.status_pinned.copy_(self.status_dev, non_blocking=True)
++        self.ids.copy_(torch.where(accept, proposal_cast, self.ids))
++        self.q_probs.copy_(torch.where(accept, proposal_probs.float(), self.q_probs))
++        self.q_slp.copy_(torch.where(accept, sample_logprobs.float(), self.q_slp))
++        self.ids.copy_(torch.where(edit, proposal_cast, self.ids))
++        self.q_probs.copy_(torch.where(edit, proposal_probs.float(), self.q_probs))
++        self.q_slp.copy_(torch.where(edit, sample_logprobs.float(), self.q_slp))
++        self.accepted.copy_(accepted_new)
++        self.counts[0].add_(accept.sum())
++        self.counts[1].add_(edit.sum())
++        self.step_t.add_(1)
++        # next-step noise (a no-op on the values when the block just completed)
++        pos = self.positions + self.block_t * self.n
++        fill = (
++            (pos + 1) * 1103515245 + (self.step_t + 1) * 12345 + algo.randtok_seed
++        ).remainder(algo.random_token_high).to(self._ids_dtype)
++        if algo.noise_mode == "mask":
++            fill = torch.full_like(self.ids, algo.mask_id)
++        self.ids.copy_(torch.where(self.accepted, self.ids, fill))
++
++    def _capture(self, key, raw_logits):
++        t0 = time.perf_counter()
++        # snapshot the block state, run eagerly once (reference), restore, capture, replay, compare
++        snap = {k: getattr(self, k).clone() for k in ("ids", "accepted", "q_probs", "q_slp", "counts", "step_t")}
++        try:
++            self._body(raw_logits)
++            torch.cuda.synchronize()
++            ref = {k: getattr(self, k).clone() for k in snap}
++            ref_status = self.status_pinned.clone()
++            for k, v in snap.items():
++                getattr(self, k).copy_(v)
++            if self.pool is None:
++                self.pool = torch.cuda.graph_pool_handle()
++            if self.stream is None:
++                self.stream = torch.cuda.Stream()
++            graph = torch.cuda.CUDAGraph()
++            stream = self.stream
++            stream.wait_stream(torch.cuda.current_stream())
++            with torch.cuda.stream(stream):
++                with torch.cuda.graph(graph, pool=self.pool, stream=stream):
++                    self._body(raw_logits)
++            torch.cuda.current_stream().wait_stream(stream)
++            torch.cuda.synchronize()
++            # the capture itself does not execute; replay once from the snapshot
++            for k, v in snap.items():
++                getattr(self, k).copy_(v)
++            graph.replay()
++            torch.cuda.synchronize()
++            def _bits(x):
++                # bit-exact compare (NaN-safe: q_probs / q_slp hold NaN for unresolved rows)
++                return x.view(torch.int32) if x.dtype == torch.float32 else x
++
++            same = bool(torch.equal(self.status_pinned, ref_status))
++            for k in snap:
++                same = same and bool(torch.equal(_bits(getattr(self, k)), _bits(ref[k])))
++        except Exception as exc:  # noqa: BLE001
++            self._disable(f"capture failed: {exc!r}")
++            for k, v in snap.items():
++                getattr(self, k).copy_(v)
++            return None
++        if not same:
++            self._disable("replay not bitwise equal to eager post-processing")
++            for k, v in snap.items():
++                getattr(self, k).copy_(v)
++            return None
++        entry = {"graph": graph}
++        self.graphs[key] = entry
++        self.stats["captures"] += 1
++        msg = "[SDAR-EXACT-POST] captured post-step graph #%d (%.3fs, bitwise ok)" % (
++            len(self.graphs), time.perf_counter() - t0)
++        logger.info(msg)
++        print(msg, flush=True)
++        return entry
++
++    def _disable(self, reason: str):
++        self.disabled = True
++        self.disabled_reason = reason
++        msg = f"[SDAR-EXACT-POST] disabled: {reason}"
++        logger.warning(msg)
++        print(msg, flush=True)
+diff --git a/inference/sglang/sglang/srt/dllm/algorithm/fused_sc_prep_graph.py b/inference/sglang/sglang/srt/dllm/algorithm/fused_sc_prep_graph.py
+new file mode 100644
+index 00000000..a6a36275
+--- /dev/null
++++ b/inference/sglang/sglang/srt/dllm/algorithm/fused_sc_prep_graph.py
+@@ -0,0 +1,113 @@
++"""Exact CUDA-graph replay of the SDAR self-conditioning input construction.
++
++From the second denoise step of a block, SDARPrefixKV builds the model input
++embeddings from the previous step's logits (embedding lookup, softmax over the
++[rows, vocab] logits, soft embedding matmul with the embedding table, gated
++adapter, post-norm) -- ~20 small launches per step outside the model graph.
++For a block without prompt rows every shape is static and the logits live in
++the graph runner's static output buffer, so the whole builder can be captured
++once and replayed: same kernels, same shapes, bitwise-checked at capture.
++
++Keyed by (logits buffer pointer, rows): the first step of a block reads the
++no-embeds graph output, later steps the with-embeds graph output.
++
++SDAR_SC_PREP_GRAPH=1 enables it (default off: bitwise-exact and HE32 32/32, but the SC
++segment is GPU-bound so the measured gain was within run-to-run noise).
++"""
++
++from __future__ import annotations
++
++import logging
++import os
++import time
++
++import torch
++
++logger = logging.getLogger(__name__)
++
++_ENABLED = os.environ.get("SDAR_SC_PREP_GRAPH", "0") == "1"
++
++
++class ExactSCPrepGraphs:
++    def __init__(self):
++        self.entries: dict[tuple, dict] = {}
++        self.pool = None
++        self.stream = None
++        self.disabled = not _ENABLED
++        self.disabled_reason: str | None = None
++        self.stats = {"replays": 0, "captures": 0}
++
++    def applicable(self, model, model_input_ids, prev_logits, selected_indices) -> bool:
++        if self.disabled or prev_logits is None or selected_indices is None:
++            return False
++        if not (model_input_ids.is_cuda and prev_logits.is_cuda):
++            return False
++        n = int(model_input_ids.numel())
++        # only fully generated blocks (every row self-conditioned): static shapes
++        if int(selected_indices.numel()) != n or prev_logits.shape[0] != n:
++            return False
++        if not prev_logits.is_contiguous():
++            return False
++        return True
++
++    def run(self, model, model_input_ids, prev_logits, sc_mask, selected_indices):
++        """Return the conditioned input embeddings (static tensor) or None."""
++        key = (int(prev_logits.data_ptr()), int(model_input_ids.numel()), int(prev_logits.shape[-1]))
++        entry = self.entries.get(key)
++        if entry is None:
++            try:
++                entry = self._capture(model, key, model_input_ids, prev_logits, sc_mask, selected_indices)
++            except Exception as exc:  # noqa: BLE001
++                self._disable(f"capture failed: {exc!r}")
++                return None
++            if entry is None:
++                return None
++        entry["ids"].copy_(model_input_ids)
++        entry["graph"].replay()
++        self.stats["replays"] += 1
++        return entry["out"]
++
++    def _capture(self, model, key, model_input_ids, prev_logits, sc_mask, selected_indices):
++        t0 = time.perf_counter()
++        ids = model_input_ids.clone()
++        mask = sc_mask.clone()
++        idx = selected_indices.clone()
++        # eager reference (also the value handed back for this step)
++        ref = model.build_self_conditioned_input_embeds(ids, prev_logits, mask, selected_indices=idx)
++        if ref is None:
++            return None
++        ref = ref.contiguous().clone()
++        torch.cuda.synchronize()
++        if self.pool is None:
++            self.pool = torch.cuda.graph_pool_handle()
++        if self.stream is None:
++            self.stream = torch.cuda.Stream()
++        graph = torch.cuda.CUDAGraph()
++        stream = self.stream
++        stream.wait_stream(torch.cuda.current_stream())
++        with torch.cuda.stream(stream):
++            with torch.cuda.graph(graph, pool=self.pool, stream=stream):
++                out = model.build_self_conditioned_input_embeds(ids, prev_logits, mask, selected_indices=idx)
++                out = out.contiguous()
++        torch.cuda.current_stream().wait_stream(stream)
++        torch.cuda.synchronize()
++        graph.replay()
++        torch.cuda.synchronize()
++        if not torch.equal(out, ref):
++            self._disable("replay not bitwise equal to eager self-conditioning builder")
++            return None
++        entry = {"graph": graph, "ids": ids, "mask": mask, "idx": idx, "out": out}
++        self.entries[key] = entry
++        self.stats["captures"] += 1
++        msg = "[SDAR-EXACT-SCPREP] captured key=%s (%d graphs, %.3fs, bitwise ok)" % (
++            key, len(self.entries), time.perf_counter() - t0)
++        logger.info(msg)
++        print(msg, flush=True)
++        return entry
++
++    def _disable(self, reason: str):
++        self.disabled = True
++        self.disabled_reason = reason
++        msg = f"[SDAR-EXACT-SCPREP] disabled: {reason}"
++        logger.warning(msg)
++        print(msg, flush=True)
+diff --git a/inference/sglang/sglang/srt/dllm/algorithm/fused_step_kernels.py b/inference/sglang/sglang/srt/dllm/algorithm/fused_step_kernels.py
+index 23086077..00c98e58 100644
+--- a/inference/sglang/sglang/srt/dllm/algorithm/fused_step_kernels.py
++++ b/inference/sglang/sglang/srt/dllm/algorithm/fused_step_kernels.py
+@@ -232,3 +232,276 @@ def row_conf_prob_ctrl(
+         HAS_PREV=has_prev, BLOCK=_BLOCK, num_warps=8,
+     )
+     return out_p, out_t
++
++
++@triton.jit
++def _row_stats_temp_kernel(
++    X,
++    stride_x,
++    V,
++    inv_t,
++    AMAX,
++    PMAX,
++    ENT,
++    LSE,
++    BLOCK: tl.constexpr,
++):
++    """One pass over a logits row at confidence temperature T (inv_t = 1/T):
++    argmax (first index), softmax(x/T)[argmax] = 1 / sum_j exp((x_j - m)/T),
++    entropy of softmax(x/T) in nats = log s - t/s with
++    s = sum exp(u_j), t = sum u_j exp(u_j), u_j = (x_j - m)/T, and logsumexp(x/T)."""
++    row = tl.program_id(0)
++    xp = X + row.to(tl.int64) * stride_x
++    m = tl.full((), -1.0e30, tl.float32)
++    s = tl.zeros((), tl.float32)
++    t = tl.zeros((), tl.float32)
++    best_idx = tl.full((), 2**31 - 1, tl.int32)
++    for start in range(0, V, BLOCK):
++        offs = start + tl.arange(0, BLOCK)
++        mask = offs < V
++        x = tl.load(xp + offs, mask=mask, other=float("-inf")).to(tl.float32)
++        cm = tl.max(x, 0)
++        m_new = tl.maximum(m, cm)
++        alpha = tl.exp((m - m_new) * inv_t)
++        u = (x - m_new) * inv_t
++        e = tl.exp(u)
++        s_chunk = tl.sum(e, 0)
++        t_chunk = tl.sum(tl.where(mask, u * e, 0.0), 0)
++        t = alpha * (t + (m - m_new) * inv_t * s) + t_chunk
++        s = alpha * s + s_chunk
++        idx_c = tl.min(tl.where(x == cm, offs, 2**31 - 1), 0)
++        best_idx = tl.where(cm > m, idx_c, best_idx)
++        m = m_new
++    log_s = tl.log(s)
++    tl.store(AMAX + row, best_idx.to(tl.int64))
++    tl.store(PMAX + row, 1.0 / s)
++    tl.store(ENT + row, log_s - t / s)
++    tl.store(LSE + row, m * inv_t + log_s)
++
++
++def row_stats_temp(
++    logits: torch.Tensor, temperature: float
++) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
++    """(argmax[int64], softmax(x/T)[argmax], entropy(softmax(x/T)), logsumexp(x/T))
++    per row in one read of the logits (fp32 or bf16 input, fp32 math).
++    Replaces argmax + x/T + softmax + gather + p*log(p) sum of the torch path;
++    values agree up to fp32 summation-order noise."""
++    assert logits.ndim == 2 and logits.is_cuda
++    if logits.stride(1) != 1:
++        logits = logits.contiguous()
++    n, v = logits.shape
++    inv_t = 1.0 / max(float(temperature), 1e-6)
++    amax = torch.empty(n, dtype=torch.int64, device=logits.device)
++    pmax = torch.empty(n, dtype=torch.float32, device=logits.device)
++    ent = torch.empty_like(pmax)
++    lse = torch.empty_like(pmax)
++    _row_stats_temp_kernel[(n,)](
++        logits, logits.stride(0), v, inv_t, amax, pmax, ent, lse, BLOCK=_BLOCK, num_warps=8
++    )
++    return amax, pmax, ent, lse
++
++
++@triton.jit
++def _sc_softmax_rows_kernel(
++    X,
++    stride_x,
++    V,
++    IDX,
++    OUT,
++    stride_o,
++    BLOCK: tl.constexpr,
++):
++    """OUT[r, :] = softmax(X[IDX[r], :]) for the selected rows, written directly in
++    OUT's dtype (bf16 for the self-conditioning soft-embedding matmul). Two reads
++    of the row (max/sum, then normalize) and one narrow write instead of
++    index_select + fp32 softmax + cast."""
++    r = tl.program_id(0)
++    idx = tl.load(IDX + r).to(tl.int64)
++    xp = X + idx * stride_x
++    op = OUT + r.to(tl.int64) * stride_o
++    m = tl.full((), -1.0e30, tl.float32)
++    s = tl.zeros((), tl.float32)
++    for start in range(0, V, BLOCK):
++        offs = start + tl.arange(0, BLOCK)
++        mask = offs < V
++        x = tl.load(xp + offs, mask=mask, other=float("-inf")).to(tl.float32)
++        cm = tl.max(x, 0)
++        m_new = tl.maximum(m, cm)
++        s = s * tl.exp(m - m_new) + tl.sum(tl.exp(x - m_new), 0)
++        m = m_new
++    for start in range(0, V, BLOCK):
++        offs = start + tl.arange(0, BLOCK)
++        mask = offs < V
++        x = tl.load(xp + offs, mask=mask, other=float("-inf")).to(tl.float32)
++        y = tl.exp(x - m) / s
++        tl.store(op + offs, y.to(OUT.dtype.element_ty), mask=mask)
++
++
++def sc_softmax_rows(
++    logits: torch.Tensor, indices: torch.Tensor, out_dtype: torch.dtype
++) -> torch.Tensor:
++    """softmax over the selected rows of a [rows, vocab] logits tensor, returned as
++    [len(indices), vocab] in out_dtype (temperature 1)."""
++    assert logits.ndim == 2 and logits.is_cuda and indices.ndim == 1
++    if logits.stride(1) != 1:
++        logits = logits.contiguous()
++    n = int(indices.numel())
++    v = logits.shape[1]
++    out = torch.empty((n, v), dtype=out_dtype, device=logits.device)
++    if n == 0:
++        return out
++    _sc_softmax_rows_kernel[(n,)](
++        logits, logits.stride(0), v, indices.to(torch.int64).contiguous(), out, out.stride(0),
++        BLOCK=_BLOCK, num_warps=8,
++    )
++    return out
++
++
++@triton.jit
++def _row_stats_temp_ptr_kernel(
++    X,
++    stride_x,
++    V,
++    INV_T,
++    AMAX,
++    PMAX,
++    ENT,
++    LSE,
++    BLOCK: tl.constexpr,
++):
++    """_row_stats_temp_kernel with 1/T read from a device scalar (CUDA-graph
++    capturable: the temperature changes per step without a host kernel arg)."""
++    row = tl.program_id(0)
++    inv_t = tl.load(INV_T).to(tl.float32)
++    xp = X + row.to(tl.int64) * stride_x
++    m = tl.full((), -1.0e30, tl.float32)
++    s = tl.zeros((), tl.float32)
++    t = tl.zeros((), tl.float32)
++    best_idx = tl.full((), 2**31 - 1, tl.int32)
++    for start in range(0, V, BLOCK):
++        offs = start + tl.arange(0, BLOCK)
++        mask = offs < V
++        x = tl.load(xp + offs, mask=mask, other=float("-inf")).to(tl.float32)
++        cm = tl.max(x, 0)
++        m_new = tl.maximum(m, cm)
++        alpha = tl.exp((m - m_new) * inv_t)
++        u = (x - m_new) * inv_t
++        e = tl.exp(u)
++        s_chunk = tl.sum(e, 0)
++        t_chunk = tl.sum(tl.where(mask, u * e, 0.0), 0)
++        t = alpha * (t + (m - m_new) * inv_t * s) + t_chunk
++        s = alpha * s + s_chunk
++        idx_c = tl.min(tl.where(x == cm, offs, 2**31 - 1), 0)
++        best_idx = tl.where(cm > m, idx_c, best_idx)
++        m = m_new
++    log_s = tl.log(s)
++    tl.store(AMAX + row, best_idx.to(tl.int64))
++    tl.store(PMAX + row, 1.0 / s)
++    tl.store(ENT + row, log_s - t / s)
++    tl.store(LSE + row, m * inv_t + log_s)
++
++
++def row_stats_temp_dev(logits: torch.Tensor, inv_t: torch.Tensor):
++    """row_stats_temp with inv_t (= 1/T, fp32) as a 0-dim/1-element device tensor."""
++    assert logits.ndim == 2 and logits.is_cuda
++    if logits.stride(1) != 1:
++        logits = logits.contiguous()
++    n, v = logits.shape
++    amax = torch.empty(n, dtype=torch.int64, device=logits.device)
++    pmax = torch.empty(n, dtype=torch.float32, device=logits.device)
++    ent = torch.empty_like(pmax)
++    lse = torch.empty_like(pmax)
++    _row_stats_temp_ptr_kernel[(n,)](
++        logits, logits.stride(0), v, inv_t, amax, pmax, ent, lse, BLOCK=_BLOCK, num_warps=8
++    )
++    return amax, pmax, ent, lse
++
++
++@triton.jit
++def _post_step_kernel(
++    ORDER, SORTED_E, EXCL,          # sort of where(eligible, entropy, +inf): indices, values, exclusive cumsum
++    ACC_TMP,                         # int8 scratch [n] for the scatter
++    ACCEPTED, PROMPT, IDS,           # bool, bool, ids (in/out)
++    PROPOSAL, PPROBS, SLP,           # int64, fp32, fp32
++    QPROBS, QSLP,                    # fp32 in/out
++    COUNTS, STATUS, STEP_T, BLOCK_T, # int64[2] in/out, bool[2] out, int64 scalar in/out, int64 scalar
++    n, bound, edit_thr, seed, high,
++    FORCE_LEFTMOST: tl.constexpr,
++    IDS_INT32: tl.constexpr,
++    BLOCK: tl.constexpr,
++):
++    """Everything after sort/cumsum of the fixed-shape entropy-bound step, in one
++    program: accept scatter + force-leftmost, edit mask, block status, the
++    where-updates of ids / q_probs / q_sample_logprobs, accept/edit counters,
++    step counter and the next step's random-vocab noise. Integer / boolean /
++    comparison arithmetic only (no float reductions), so the results are
++    identical to the torch chain."""
++    offs = tl.arange(0, BLOCK)
++    m = offs < n
++    order = tl.load(ORDER + offs, mask=m, other=0)
++    se = tl.load(SORTED_E + offs, mask=m, other=float("inf"))
++    excl = tl.load(EXCL + offs, mask=m, other=float("inf"))
++    sel_sorted = (excl <= bound) & (se < float("inf")) & m
++    tl.store(ACC_TMP + order, sel_sorted.to(tl.int8), mask=m)
++    tl.debug_barrier()
++    accept = (tl.load(ACC_TMP + offs, mask=m, other=0) != 0) & m
++    accepted = (tl.load(ACCEPTED + offs, mask=m, other=0) != 0)
++    prompt = (tl.load(PROMPT + offs, mask=m, other=0) != 0)
++    eligible = (~accepted) & (~prompt) & m
++    if FORCE_LEFTMOST:
++        none = tl.sum(accept.to(tl.int32), 0) == 0
++        first = tl.min(tl.where(eligible, offs, n), 0)
++        accept = accept | (none & eligible & (offs == first))
++    ids = tl.load(IDS + offs, mask=m, other=0).to(tl.int64)
++    proposal = tl.load(PROPOSAL + offs, mask=m, other=0)
++    if IDS_INT32:
++        proposal_cast = proposal.to(tl.int32).to(tl.int64)
++    else:
++        proposal_cast = proposal
++    pp = tl.load(PPROBS + offs, mask=m, other=0.0)
++    edit = accepted & (~prompt) & (pp > edit_thr) & (proposal_cast != ids) & m
++    accepted_new = accepted | accept
++    # status: done, changed
++    done = tl.sum(((~accepted_new) & m).to(tl.int32), 0) == 0
++    changed = tl.sum((accept | edit).to(tl.int32), 0) > 0
++    tl.store(STATUS, done.to(tl.int8))
++    tl.store(STATUS + 1, changed.to(tl.int8))
++    upd = accept | edit
++    ids_new = tl.where(upd, proposal_cast, ids)
++    slp = tl.load(SLP + offs, mask=m, other=0.0)
++    qp = tl.load(QPROBS + offs, mask=m, other=0.0)
++    qs = tl.load(QSLP + offs, mask=m, other=0.0)
++    tl.store(QPROBS + offs, tl.where(upd, pp, qp), mask=m)
++    tl.store(QSLP + offs, tl.where(upd, slp, qs), mask=m)
++    tl.store(ACCEPTED + offs, accepted_new.to(tl.int8), mask=m)
++    c0 = tl.load(COUNTS)
++    c1 = tl.load(COUNTS + 1)
++    tl.store(COUNTS, c0 + tl.sum(accept.to(tl.int64), 0))
++    tl.store(COUNTS + 1, c1 + tl.sum(edit.to(tl.int64), 0))
++    step = tl.load(STEP_T) + 1
++    tl.store(STEP_T, step)
++    blk = tl.load(BLOCK_T)
++    pos = offs.to(tl.int64) + blk * n
++    fill = ((pos + 1) * 1103515245 + (step + 1) * 12345 + seed) % high
++    if IDS_INT32:
++        fill = fill.to(tl.int32).to(tl.int64)
++    ids_final = tl.where(accepted_new, ids_new, fill)
++    if IDS_INT32:
++        tl.store(IDS + offs, ids_final.to(tl.int32), mask=m)
++    else:
++        tl.store(IDS + offs, ids_final, mask=m)
++
++
++def post_step_fused(order, sorted_e, excl, acc_tmp, accepted, prompt, ids, proposal, pprobs, slp,
++                    qprobs, qslp, counts, status, step_t, block_t, bound, edit_thr, seed, high,
++                    force_leftmost: bool):
++    n = int(ids.numel())
++    block = 1
++    while block < n:
++        block *= 2
++    _post_step_kernel[(1,)](
++        order, sorted_e, excl, acc_tmp, accepted, prompt, ids, proposal, pprobs, slp,
++        qprobs, qslp, counts, status, step_t, block_t,
++        n, float(bound), float(edit_thr), int(seed), int(high),
++        FORCE_LEFTMOST=bool(force_leftmost), IDS_INT32=(ids.dtype == torch.int32), BLOCK=block, num_warps=4,
++    )
+diff --git a/inference/sglang/sglang/srt/dllm/algorithm/sdar_prefix_kv.py b/inference/sglang/sglang/srt/dllm/algorithm/sdar_prefix_kv.py
+index f2ce26c5..de2a04d0 100644
+--- a/inference/sglang/sglang/srt/dllm/algorithm/sdar_prefix_kv.py
++++ b/inference/sglang/sglang/srt/dllm/algorithm/sdar_prefix_kv.py
+@@ -128,6 +128,40 @@ _PROFILE_FORWARD_SEEN = [0]
+ # refine / commit forward plus the Python between them) in torch.profiler.
+ _PROFILE_BLOCK_AT = int(os.environ.get("SDAR_PROFILE_BLOCK", "0") or 0)
+ _PROFILE_BLOCK_SEEN = [0]
++# SDAR_PROFILE_BLOCK_TRACE=/path.json: also export the profiled block as a chrome trace
++_PROFILE_BLOCK_TRACE = os.environ.get("SDAR_PROFILE_BLOCK_TRACE", "")
++# SDAR_STEP_TIMELINE=1: per-block CUDA-event timeline of the denoise step phases
++# (sc prep | forward | post-processing) printed once per block; production-mode
++# timing without torch.profiler distortion. SDAR_STEP_TIMELINE_EVERY=N prints every N-th block.
++_STEP_TIMELINE = os.environ.get("SDAR_STEP_TIMELINE", "0") == "1"
++# SDAR_FIXED_SHAPE_STEP=1 (default): sync-free denoise step for the causal path --
++# fixed-shape entropy-bound accept, torch.where updates instead of boolean-mask
++# index_put (each of which is a hidden nonzero + device sync), one status D2H per
++# step, per-block accept/edit counts, dllm_same_metadata graph replays. Same kernels
++# and values as the original path (bitwise-identical outputs); 0 restores it.
++_FIXED_SHAPE_STEP = os.environ.get("SDAR_FIXED_SHAPE_STEP", "1") == "1"
++# SDAR_GRAPH_TIMING_EVENTS=0 (default): skip the two CUDA events per denoise forward
++# that only feed the cuda_graph_* latency metrics.
++_GRAPH_TIMING_EVENTS = os.environ.get("SDAR_GRAPH_TIMING_EVENTS", "0") == "1"
++# SDAR_FUSED_ROW_STATS=1: in the fixed-shape greedy step, one Triton pass over the
++# [rows, vocab] logits yields argmax / confidence probability / entropy at the
++# confidence temperature (fused_step_kernels.row_stats_temp) instead of argmax +
++# x/T + softmax + gather + p*log(p) sum (~0.8 ms/step on [256, 152k]). Values agree
++# with the torch path up to fp32 summation-order noise (not bitwise). Validated:
++# the paper's evaluation protocol enables it, and re-runs reproduce its numbers.
++_FUSED_ROW_STATS = os.environ.get("SDAR_FUSED_ROW_STATS", "0") == "1"
++# SDAR_POST_GRAPH=1 (default): with the fused row stats, capture the whole per-step
++# post-processing (row stats, accept/edit, status, updates, next-step noise) as one
++# CUDA graph per logits buffer (fused_post_graph.py); same kernels, bitwise-checked.
++_POST_GRAPH = os.environ.get("SDAR_POST_GRAPH", "1") == "1"
++# SDAR_SC_SIDE_STREAM=1 (default): compute the self-conditioning soft embeddings
++# (softmax(prev_logits) @ E, ~0.75 ms of GPU work that depends only on the logits)
++# on a second CUDA stream right after each denoise forward, overlapping the
++# accept/edit post-processing; identical ops and values, only the schedule differs.
++_SC_SIDE_STREAM = os.environ.get("SDAR_SC_SIDE_STREAM", "0") == "1"
++_STEP_TIMELINE_EVERY = int(os.environ.get("SDAR_STEP_TIMELINE_EVERY", "1") or 1)
++_STEP_TIMELINE_SEEN = [0]
++_RUN_TL_LAST_EXIT = [None]
+ 
+ 
+ class SDARPrefixKV(DllmAlgorithm):
+@@ -432,6 +466,9 @@ class SDARPrefixKV(DllmAlgorithm):
+         self._boundary_hidden_by_req: dict[int, torch.Tensor] = {}
+         self._selected_logprobs_by_req: dict[int, dict[str, list[float] | list[int]]] = {}
+         self._request_stats_by_req: dict[int, list[dict[str, int | float]]] = {}
++        # per-block token/prob lists whose device->host copy is still in flight
++        # (materialized lazily so the host does not stall on the commit forward)
++        self._pending_block_d2h: list[dict] = []
+         self._request_replay_tensors_by_req: dict[int, list[dict]] = {}
+         self._request_generated_tokens_by_req: dict[int, int] = {}
+         self._stats_lock = threading.Lock()
+@@ -480,6 +517,35 @@ class SDARPrefixKV(DllmAlgorithm):
+ 
+             self._exact_prefill = ExactPrefillGraphs(self.block_size)
+             self._sc_adapter_graphs = ExactSCAdapterGraphs()
++        # commit_mode=causal + CUDA graph: exact graph replay of the eager commit
++        # forward (fused_commit_graph.py, SDAR_COMMIT_GRAPH=1), bitwise-checked at capture.
++        self._exact_commit = None
++        if self.commit_mode == "causal" and self._sdar_cuda_graph_enabled:
++            from sglang.srt.dllm.algorithm.fused_commit_graph import ExactCommitGraphs
++
++            self._exact_commit = ExactCommitGraphs(self.block_size)
++        # self-conditioning input construction as an exact CUDA graph
++        # (fused_sc_prep_graph.py, SDAR_SC_PREP_GRAPH=1 default) for fully
++        # generated blocks; bitwise-checked at capture.
++        self._sc_prep_graphs = None
++        if self._sdar_cuda_graph_enabled:
++            from sglang.srt.dllm.algorithm.fused_sc_prep_graph import ExactSCPrepGraphs
++
++            self._sc_prep_graphs = ExactSCPrepGraphs()
++        self._post_graphs = None  # fused_post_graph.ExactPostStepGraphs, created lazily
++        self._sc_side_stream = None  # torch.cuda.Stream for the SC soft-embedding matmul
++        self._post_graph_ok = bool(
++            _POST_GRAPH
++            and _FUSED_ROW_STATS
++            and self._sdar_cuda_graph_enabled
++            and self.logits_shift
++            and self.allow_accepted_change
++            and self.top_k <= 0
++            and self.top_p >= 1.0
++            and self.accept_rule == "entropy_bound"
++            and self.confidence_temperature_mode in ("step_linear", "fixed", None, "none")
++            and all(self._temperature(s) <= 0 for s in range(1, int(self.max_steps_per_block) + 1))
++        )
+         if self._sdar_cuda_graph_enabled:
+             logger.info(
+                 "[SDAR-CudaGraph] CUDA graph acceleration enabled "
+@@ -488,6 +554,9 @@ class SDARPrefixKV(DllmAlgorithm):
+                 _env_cuda_graph,
+             )
+         self._cuda_graph_metrics = SdarCudaGraphMetrics()
++        # fixed-shape step: pinned host mirror of the per-step (done, changed) status
++        self._status_pinned = torch.empty((2,), dtype=torch.bool, pin_memory=torch.cuda.is_available())
++        self._status_event = torch.cuda.Event() if torch.cuda.is_available() else None
+         # Log every N steps to avoid spam; reduce to 1 for debugging
+         self._cuda_graph_log_interval: int = int(
+             os.environ.get("SGLANG_SDAR_CUDA_GRAPH_LOG_INTERVAL", "500")
+@@ -754,7 +823,42 @@ class SDARPrefixKV(DllmAlgorithm):
+                     self._trace_dir,
+                 )
+ 
++    def _host_decode_block_hint(self, forward_batch) -> int | None:
++        """req_pool_idx of the single request when the scheduler's host-side
++        bookkeeping already tells us this batch is a fully generated denoise block
++        (block index >= 1: the prompt tail can only sit in the first decode block).
++        Lets the block start skip every device->host sync (mask/prompt/rpx reads),
++        so the host work of the next block overlaps the previous block's commit."""
++        if not getattr(forward_batch, "dllm_is_denoise", False):
++            return None
++        if int(forward_batch.batch_size) != 1:
++            return None
++        rpx_cpu = getattr(forward_batch, "dllm_rpx_cpu", None)
++        if not rpx_cpu:
++            return None
++        rpx = int(rpx_cpu[0])
++        if self._trace_block_idx.get(rpx, 0) < 1:
++            return None
++        if int(forward_batch.input_ids.numel()) != self.block_size:
++            return None
++        return rpx
++
++    def _drain_pending_block_d2h(self) -> None:
++        """Materialize the per-block token/prob lists whose pinned copies were
++        enqueued after the commit forward (see the commit branch of _run_impl)."""
++        pending, self._pending_block_d2h = self._pending_block_d2h, []
++        for item in pending:
++            item["event"].synchronize()
++            f = item["floats"]
++            item["clean_token_probs"].extend(float(x) for x in f[0].tolist())
++            sel = item["selected"]
++            sel["token_ids"].extend(int(x) for x in item["ids"].tolist())
++            sel["raw_logprobs"].extend(float(x) for x in f[1].tolist())
++            sel["sample_logprobs"].extend(float(x) for x in f[2].tolist())
++            sel["sample_probs"].extend(float(x) for x in f[3].tolist())
++
+     def cleanup_request(self, req_pool_idx: int):
++        self._drain_pending_block_d2h()
+         req_pool_idx = int(req_pool_idx)
+         generation = self._capture_generation_for_request(req_pool_idx)
+         if self._async_capture_worker is not None:
+@@ -1018,6 +1122,7 @@ class SDARPrefixKV(DllmAlgorithm):
+                 self._request_stats_by_req.pop(req_pool_idx, None)
+                 self._request_replay_tensors_by_req.pop(req_pool_idx, None)
+             raise
++        self._drain_pending_block_d2h()
+         with self._replay_tensors_lock:
+             selected_logprobs = self._selected_logprobs_by_req.pop(
+                 req_pool_idx, None
+@@ -1121,7 +1226,7 @@ class SDARPrefixKV(DllmAlgorithm):
+             return self._forward_without_generic_logprob(model_runner, forward_batch)
+ 
+         start_event = end_event = None
+-        if forward_batch.input_ids.device.type == "cuda":
++        if _GRAPH_TIMING_EVENTS and forward_batch.input_ids.device.type == "cuda":
+             start_event = torch.cuda.Event(enable_timing=True)
+             end_event = torch.cuda.Event(enable_timing=True)
+             start_event.record()
+@@ -2459,6 +2564,48 @@ class SDARPrefixKV(DllmAlgorithm):
+             accept[torch.nonzero(eligible_mask, as_tuple=False).flatten()[0]] = True
+         return accept
+ 
++    def _build_accept_mask_fixed(
++        self,
++        eligible_mask: torch.Tensor,
++        entropy: torch.Tensor,
++    ) -> torch.Tensor:
++        """entropy_bound accept without any device->host synchronization.
++
++        Same selection as _build_accept_mask: eligible rows sorted by entropy
++        ascending, accept while the exclusive cumulative entropy stays within
++        the bound, leftmost eligible row forced when nothing qualifies.
++        Ineligible rows carry +inf so they sort last and never qualify; the
++        cumulative sums of the eligible prefix are the same partial sums as on
++        the compacted vector."""
++        masked = torch.where(eligible_mask, entropy, float("inf"))
++        sorted_entropy, order = torch.sort(masked, descending=False)
++        selected_sorted = (
++            (torch.cumsum(sorted_entropy, dim=-1) - sorted_entropy) <= self.entropy_bound
++        ) & torch.isfinite(sorted_entropy)
++        accept = torch.zeros_like(eligible_mask)
++        accept[order] = selected_sorted
++        if self.force_accept_leftmost:
++            first = torch.argmax(eligible_mask.to(torch.int8))
++            positions = torch.arange(
++                eligible_mask.numel(), device=eligible_mask.device
++            )
++            accept = accept | ((~accept.any()) & eligible_mask & (positions == first))
++        return accept
++
++    def _refresh_unaccepted_inputs_fixed(
++        self,
++        block_input_ids: torch.Tensor,
++        accepted_mask: torch.Tensor,
++        block_idx: int,
++        step_idx: int,
++    ) -> None:
++        """_refresh_unaccepted_inputs without the .any() sync (random_vocab / mask)."""
++        if self.noise_mode == "mask":
++            fill = torch.full_like(block_input_ids, self.mask_id)
++        else:
++            fill = self._random_unresolved(block_input_ids, block_idx=block_idx, step_idx=step_idx)
++        block_input_ids.copy_(torch.where(accepted_mask, block_input_ids, fill))
++
+     def _decode_one_block(
+         self,
+         model_runner: ModelRunner,
+@@ -2485,7 +2632,43 @@ class SDARPrefixKV(DllmAlgorithm):
+         self._check_decode_span(batch_id, block_start, block_end)
+         block_input_ids = forward_batch.input_ids[block_start:block_end]
+         accepted_mask = prompt_mask.clone()
+-        self._refresh_unaccepted_inputs(block_input_ids, accepted_mask, block_idx, 0)
++        _fixed = (
++            _FIXED_SHAPE_STEP
++            and self._async_capture_worker is None
++            and not self._trace_dir
++            and not self._trace_tensors
++            and not self._gpu_replay_lease_enabled
++            and self.accept_rule == "entropy_bound"
++            and not self.edit_shield_eos
++            and self.noise_mode in ("mask", "random_vocab")
++            and self.temperature_mode not in ADAPTIVE_TEMPERATURE_MODES
++            and self.confidence_temperature_mode not in ADAPTIVE_CONFIDENCE_TEMPERATURE_MODES
++        )
++        if _fixed:
++            self._refresh_unaccepted_inputs_fixed(block_input_ids, accepted_mask, block_idx, 0)
++        else:
++            self._refresh_unaccepted_inputs(block_input_ids, accepted_mask, block_idx, 0)
++        # device-side accept/edit counters (one D2H at block end) in fixed mode
++        _dev_counts = (
++            torch.zeros((2,), dtype=torch.int64, device=block_input_ids.device) if _fixed else None
++        )
++        # self-conditioning rows (= every non-prompt row) are constant across the
++        # block's steps: one nonzero here instead of .any()+nonzero per step
++        _sc_indices = (
++            (
++                torch.arange(block_input_ids.numel(), device=block_input_ids.device)
++                if int(start_offset) == 0
++                else torch.nonzero(~prompt_mask, as_tuple=False).flatten()
++            )
++            if _fixed
++            else None
++        )
++        _use_post = bool(_fixed and self._post_graph_ok)
++        _post_begun = False
++        _sc_side = bool(_fixed and _SC_SIDE_STREAM and _sc_indices is not None
++                        and _sc_indices.numel() == block_input_ids.numel()
++                        and block_start == 0 and self._sc_active(model_runner.model))
++        _sc_pre = None  # (soft_embeddings, event) computed on the side stream for the next step
+         q_probs = torch.full(
+             (self.block_size,),
+             float("nan"),
+@@ -2514,7 +2697,9 @@ class SDARPrefixKV(DllmAlgorithm):
+             else None
+         )
+         refine_steps = 0
+-        completed_once = bool(accepted_mask.all())
++        # start_offset == number of prompt rows in the block; with none, nothing is
++        # accepted yet (accepted_mask = prompt_mask.clone()) -- no sync needed
++        completed_once = False if int(start_offset) == 0 else bool(accepted_mask.all())
+         trace_steps = []
+         adaptive_temperature_diagnostics: list[dict] = []
+         adaptive_confidence_temperature_diagnostics: list[dict] = []
+@@ -2531,9 +2716,22 @@ class SDARPrefixKV(DllmAlgorithm):
+             or self._trace_tensors
+         )
+         _need_entropy = _tracing or self.accept_rule in ("entropy_threshold", "entropy_bound")
++        _tl = None
++        if _STEP_TIMELINE:
++            _STEP_TIMELINE_SEEN[0] += 1
++            if _STEP_TIMELINE_SEEN[0] % _STEP_TIMELINE_EVERY == 0:
++                _tl = []  # per step: (evA, evB, evC, evD, hA, hB, hC, hD)
++
++        def _tl_mark():
++            ev = torch.cuda.Event(enable_timing=True)
++            ev.record()
++            return ev, time.perf_counter()
++
+         for step in range(1, max_iterations + 1):
+             if completed_once and refine_steps >= self.post_accept_refine_steps:
+                 break
++            if _tl is not None:
++                _evA, _hA = _tl_mark()
+ 
+             was_completed = completed_once
+             accepted_before = accepted_mask.clone()
+@@ -2558,17 +2756,24 @@ class SDARPrefixKV(DllmAlgorithm):
+                 and self._sc_active(model_runner.model)
+                 and hasattr(model_runner.model, "build_self_conditioned_input_embeds")
+             ):
+-                full_prev_logits = torch.zeros(
+-                    (
+-                        model_input_ids.shape[0],
+-                        prev_raw_logits.shape[-1],
+-                    ),
+-                    dtype=prev_raw_logits.dtype,
+-                    device=prev_raw_logits.device,
+-                )
+-                full_prev_logits[block_start:block_end] = prev_raw_logits
+-                sc_mask = torch.zeros_like(model_input_ids, dtype=torch.bool)
+-                sc_mask[block_start:block_end] = ~prompt_mask
++                if block_start == 0 and block_end == model_input_ids.shape[0]:
++                    # extend == this block (prefix K/V cached): the previous
++                    # logits already cover every model row -- no [rows, vocab]
++                    # zeros + copy per step
++                    full_prev_logits = prev_raw_logits
++                    sc_mask = ~prompt_mask
++                else:
++                    full_prev_logits = torch.zeros(
++                        (
++                            model_input_ids.shape[0],
++                            prev_raw_logits.shape[-1],
++                        ),
++                        dtype=prev_raw_logits.dtype,
++                        device=prev_raw_logits.device,
++                    )
++                    full_prev_logits[block_start:block_end] = prev_raw_logits
++                    sc_mask = torch.zeros_like(model_input_ids, dtype=torch.bool)
++                    sc_mask[block_start:block_end] = ~prompt_mask
+                 old_post_norm = getattr(
+                     model_runner.model, "_force_self_conditioning_post_norm", False
+                 )
+@@ -2580,18 +2785,50 @@ class SDARPrefixKV(DllmAlgorithm):
+                     if self._gpu_replay_lease_enabled
+                     else None
+                 )
+-                input_embeds = model_runner.model.build_self_conditioned_input_embeds(
+-                    model_input_ids,
+-                    full_prev_logits,
+-                    sc_mask,
+-                )
++                _sc_static = _fixed and block_start == 0 and block_end == model_input_ids.shape[0]
++                input_embeds = None
++                if (
++                    _sc_static
++                    and self._sc_prep_graphs is not None
++                    and self._sc_prep_graphs.applicable(
++                        model_runner.model, model_input_ids, full_prev_logits, _sc_indices
++                    )
++                ):
++                    input_embeds = self._sc_prep_graphs.run(
++                        model_runner.model, model_input_ids, full_prev_logits, sc_mask, _sc_indices
++                    )
++                if input_embeds is None:
++                    _pre_sig = None
++                    if _sc_pre is not None:
++                        _soft, _ev_sc = _sc_pre
++                        torch.cuda.current_stream().wait_event(_ev_sc)
++                        _soft.record_stream(torch.cuda.current_stream())
++                        _pre_sig = _soft
++                        _sc_pre = None
++                    input_embeds = model_runner.model.build_self_conditioned_input_embeds(
++                        model_input_ids,
++                        full_prev_logits,
++                        sc_mask,
++                        selected_indices=_sc_indices if _sc_static else None,
++                        selected_all_rows=bool(
++                            _sc_static and _sc_indices.numel() == model_input_ids.shape[0]
++                        ),
++                        precomputed_signal=_pre_sig,
++                    )
+                 model_runner.model._force_self_conditioning_post_norm = old_post_norm
+                 if input_embeds is not None:
+                     forward_batch.input_embeds = input_embeds.contiguous()
+                     sc_stats = getattr(
+                         model_runner.model, "_last_self_conditioning_stats", None
+                     )
++            if _tl is not None:
++                _evB, _hB = _tl_mark()
+             forward_batch.input_ids = model_input_ids
++            # Consecutive denoise steps of one block reuse the same ForwardBatch,
++            # req/seq_lens/out_cache_loc/positions: from the second step on the
++            # graph runner may skip buffer population + attention re-plan and
++            # only copy the token inputs (CudaGraphRunner.replay fast path).
++            forward_batch.dllm_same_metadata = bool(_fixed and step > 1)
+             try:
+                 out = self._forward_denoise_with_graph_metrics(
+                     model_runner, forward_batch
+@@ -2599,12 +2836,40 @@ class SDARPrefixKV(DllmAlgorithm):
+                 logits_output = out.logits_output
+                 can_run_cuda_graph = out.graph_was_replayed
+             finally:
++                forward_batch.dllm_same_metadata = False
+                 forward_batch.dllm_is_denoise = old_is_denoise
+                 forward_batch.input_ids = old_input_ids
+                 forward_batch.input_embeds = old_input_embeds
+                 forward_batch.disable_cuda_graph_once = old_disable_graph
++            if _tl is not None:
++                _evC, _hC = _tl_mark()
+             if not was_completed:
+                 denoise_forwards += 1
++            if _sc_side:
++                # next step's SC signal = softmax(this step's logits) @ E: launch on
++                # the side stream now so it overlaps the accept/edit kernels below
++                if self._sc_side_stream is None:
++                    self._sc_side_stream = torch.cuda.Stream()
++                _ev_fwd = torch.cuda.Event()
++                _ev_fwd.record()
++                _blk_logits = logits_output.full_logits[block_start:block_end]
++                _model = model_runner.model
++                _embed_w = _model.model.embed_tokens.weight
++                _chunk = max(1, int(getattr(_model.config, "self_conditioning_chunk_size", 256)))
++                _rows = int(_blk_logits.shape[0])
++                with torch.cuda.stream(self._sc_side_stream):
++                    self._sc_side_stream.wait_event(_ev_fwd)
++                    _soft = torch.empty(
++                        (_rows, int(_embed_w.shape[1])), dtype=_embed_w.dtype, device=_embed_w.device
++                    )
++                    # same chunking as SDARForCausalLM.build_self_conditioned_input_embeds
++                    # (per-chunk softmax + matmul with the same M), so the values are identical
++                    for _s in range(0, _rows, _chunk):
++                        _probs = F.softmax(_blk_logits[_s:_s + _chunk].float(), dim=-1).to(_embed_w.dtype)
++                        _soft[_s:_s + _chunk].copy_(_probs.matmul(_embed_w).to(_embed_w.dtype))
++                    _ev_sc = torch.cuda.Event()
++                    _ev_sc.record()
++                _sc_pre = (_soft, _ev_sc)
+ 
+             input_ids_before = self._capture_replay_input_ids(
+                 model_input_ids,
+@@ -2612,98 +2877,239 @@ class SDARPrefixKV(DllmAlgorithm):
+                 block_start,
+                 block_end,
+             )
+-            raw_logits = logits_output.full_logits[block_start:block_end].float()
++            _step_capped = min(step, self.max_steps_per_block)
++            _fused_rows = (
++                _fixed
++                and _FUSED_ROW_STATS
++                and not _need_raw_logprobs
++                and self.top_k <= 0
++                and self.top_p >= 1.0
++                and self._temperature(_step_capped) <= 0
++                and self.confidence_temperature_mode != "adaptive"
++            )
++            if _fused_rows:
++                # the fused row kernels and the self-conditioning builder upcast
++                # per element: keep whatever dtype the LM head produced
++                raw_logits = logits_output.full_logits[block_start:block_end]
++            else:
++                raw_logits = logits_output.full_logits[block_start:block_end].float()
+             prev_raw_logits = raw_logits.detach()
+             boundary = None
+             if block_idx > 0:
+                 boundary = self._boundary_logits_by_req.get(int(req_pool_idx))
+             if boundary is not None:
+-                boundary = boundary.to(device=raw_logits.device, dtype=raw_logits.dtype)
++                boundary = (
++                    boundary.to(device=raw_logits.device)
++                    if _fused_rows
++                    else boundary.to(device=raw_logits.device, dtype=raw_logits.dtype)
++                )
+             if boundary is None:
+                 # Degraded fallback for unusual scheduler states: use in-place
+                 # logits for position 0 if no prefix boundary has been observed.
+                 boundary = raw_logits[0]
++            if _use_post and _fused_rows and not was_completed and not _need_raw_logprobs:
++                if self._post_graphs is None:
++                    from sglang.srt.dllm.algorithm.fused_post_graph import ExactPostStepGraphs
++
++                    self._post_graphs = ExactPostStepGraphs(
++                        self, self.block_size, int(raw_logits.shape[-1]),
++                        raw_logits.device, block_input_ids.dtype,
++                    )
++                _pg = self._post_graphs
++                if _pg.disabled:
++                    _use_post = False
++                else:
++                    if not _post_begun:
++                        _pg.begin_block(block_input_ids, accepted_mask, prompt_mask, block_idx)
++                        _post_begun = True
++                    _res = _pg.step(raw_logits, boundary)
++                    if _res is None:
++                        # capture failed: mirrors were restored to the pre-step state;
++                        # continue this step on the eager fixed path
++                        _use_post = False
++                    else:
++                        block_completed_now, changed = _res
++                        block_input_ids.copy_(_pg.ids)
++                        denoise_step += 1
++                        if _tl is not None:
++                            _evD, _hD = _tl_mark()
++                            _tl.append((_evA, _evB, _evC, _evD, _hA, _hB, _hC, _hD))
++                        if block_completed_now:
++                            completed_once = True
++                            break
++                        continue
++            if _fused_rows:
++                from sglang.srt.dllm.algorithm.fused_step_kernels import row_stats_temp
++
++                if self.confidence_temperature_mode == "step_linear":
++                    _conf_t = max(
++                        self.confidence_temperature_min,
++                        self.confidence_temperature_max
++                        - self.confidence_temperature_step_decrement
++                        * float(max(_step_capped - 1, 0)),
++                    )
++                else:
++                    _conf_t = float(self.confidence_temperature)
++                sampling_temperature = 0.0
++                if self.logits_shift:
++                    # boundary row + this block's rows [:-1]: no [rows, vocab] cat copy
++                    _pb, _cb, _eb, _ = row_stats_temp(boundary.unsqueeze(0), _conf_t)
++                    _pr, _cr, _er, _ = row_stats_temp(raw_logits[:-1], _conf_t)
++                    proposal = torch.cat([_pb, _pr])
++                    proposal_probs = torch.cat([_cb, _cr])
++                    entropy = torch.cat([_eb, _er])
++                else:
++                    proposal, proposal_probs, entropy, _ = row_stats_temp(raw_logits, _conf_t)
++                probs = None
++                confidence_probs = None
++                raw_logprobs = None
++                diagnostic_sample_ids = diagnostic_sample_probs = None
++                _adaptive_temp_metrics = None
++                _adaptive_confidence_temp_metrics = None
++                sample_logprobs = proposal_probs.clamp_min(
++                    torch.finfo(proposal_probs.dtype).tiny
++                ).log()
+             if self.logits_shift:
+-                curr_logits = torch.cat([boundary.unsqueeze(0), raw_logits[:-1]], dim=0)
++                curr_logits = None if _fused_rows else torch.cat([boundary.unsqueeze(0), raw_logits[:-1]], dim=0)
+             else:
+                 curr_logits = raw_logits
+-            _step_capped = min(step, self.max_steps_per_block)
+             _sample_temp_override = None
+-            _adaptive_temp_metrics: dict | None = None
+-            if self.temperature_mode in ADAPTIVE_TEMPERATURE_MODES:
+-                _sample_temp_override, _adaptive_temp_metrics = self._compute_adaptive_temperature(
+-                    req_pool_idx, _step_capped, curr_logits, prompt_mask, accepted_mask
++            if not _fused_rows:
++                _adaptive_temp_metrics: dict | None = None
++                if self.temperature_mode in ADAPTIVE_TEMPERATURE_MODES:
++                    _sample_temp_override, _adaptive_temp_metrics = self._compute_adaptive_temperature(
++                        req_pool_idx, _step_capped, curr_logits, prompt_mask, accepted_mask
++                    )
++                sampling_temperature = float(
++                    _sample_temp_override
++                    if _sample_temp_override is not None
++                    else self._temperature(_step_capped)
+                 )
+-            sampling_temperature = float(
+-                _sample_temp_override
+-                if _sample_temp_override is not None
+-                else self._temperature(_step_capped)
+-            )
+-            proposal, probs, _ = self._sample_from_logits(
+-                curr_logits,
+-                _step_capped,
+-                temperature_override=_sample_temp_override,
+-            )
+-            _confidence_temp_override = None
+-            _adaptive_confidence_temp_metrics: dict | None = None
+-            if (
+-                self.confidence_temperature_mode
+-                in ADAPTIVE_CONFIDENCE_TEMPERATURE_MODES
+-            ):
+-                (
+-                    _confidence_temp_override,
+-                    _adaptive_confidence_temp_metrics,
+-                ) = self._compute_adaptive_confidence_temperature(
+-                    req_pool_idx,
+-                    _step_capped,
++                proposal, probs, _ = self._sample_from_logits(
+                     curr_logits,
+-                    prompt_mask,
+-                    accepted_before,
++                    _step_capped,
++                    temperature_override=_sample_temp_override,
+                 )
+-            elif self.confidence_temperature_mode == "step_linear":
+-                _confidence_temp_override = max(
+-                    self.confidence_temperature_min,
+-                    self.confidence_temperature_max
+-                    - self.confidence_temperature_step_decrement
+-                    * float(max(_step_capped - 1, 0)),
++                _confidence_temp_override = None
++                _adaptive_confidence_temp_metrics: dict | None = None
++                if (
++                    self.confidence_temperature_mode
++                    in ADAPTIVE_CONFIDENCE_TEMPERATURE_MODES
++                ):
++                    (
++                        _confidence_temp_override,
++                        _adaptive_confidence_temp_metrics,
++                    ) = self._compute_adaptive_confidence_temperature(
++                        req_pool_idx,
++                        _step_capped,
++                        curr_logits,
++                        prompt_mask,
++                        accepted_before,
++                    )
++                elif self.confidence_temperature_mode == "step_linear":
++                    _confidence_temp_override = max(
++                        self.confidence_temperature_min,
++                        self.confidence_temperature_max
++                        - self.confidence_temperature_step_decrement
++                        * float(max(_step_capped - 1, 0)),
++                    )
++                confidence_probs = self._confidence_probs(
++                    curr_logits,
++                    temperature_override=_confidence_temp_override,
+                 )
+-            confidence_probs = self._confidence_probs(
+-                curr_logits,
+-                temperature_override=_confidence_temp_override,
+-            )
+-            diagnostic_sample_ids, diagnostic_sample_probs = (
+-                self._trace_probability_sample(
+-                    confidence_probs,
+-                    req_pool_idx,
+-                    block_idx,
+-                    step,
++                diagnostic_sample_ids, diagnostic_sample_probs = (
++                    self._trace_probability_sample(
++                        confidence_probs,
++                        req_pool_idx,
++                        block_idx,
++                        step,
++                    )
+                 )
+-            )
+-            proposal_probs = confidence_probs.gather(-1, proposal.unsqueeze(-1)).squeeze(-1)
+-            # Full-vocab passes only when something downstream reads them:
+-            # raw_logprobs -> return_logprob / trace / capture; entropy -> the
+-            # entropy accept rules / trace. Plain eval reads neither
+-            # (~1 ms/step of GPU time on [256, 152k] for SDAR).
+-            if _need_raw_logprobs:
+-                raw_logprobs = F.log_softmax(curr_logits.float(), dim=-1).gather(
+-                    -1, proposal.unsqueeze(-1)
+-                ).squeeze(-1)
+-            else:
+-                raw_logprobs = None
+-            sample_logprobs = proposal_probs.clamp_min(
+-                torch.finfo(proposal_probs.dtype).tiny
+-            ).log()
+-            if _need_entropy:
+-                entropy = -(
+-                    confidence_probs * confidence_probs.clamp_min(torch.finfo(confidence_probs.dtype).tiny).log()
+-                ).sum(dim=-1)
+-            else:
+-                entropy = None
++                proposal_probs = confidence_probs.gather(-1, proposal.unsqueeze(-1)).squeeze(-1)
++                # Full-vocab passes only when something downstream reads them:
++                # raw_logprobs -> return_logprob / trace / capture; entropy -> the
++                # entropy accept rules / trace. Plain eval reads neither
++                # (~1 ms/step of GPU time on [256, 152k] for SDAR).
++                if _need_raw_logprobs:
++                    raw_logprobs = F.log_softmax(curr_logits.float(), dim=-1).gather(
++                        -1, proposal.unsqueeze(-1)
++                    ).squeeze(-1)
++                else:
++                    raw_logprobs = None
++                sample_logprobs = proposal_probs.clamp_min(
++                    torch.finfo(proposal_probs.dtype).tiny
++                ).log()
++                if _need_entropy:
++                    entropy = -(
++                        confidence_probs * confidence_probs.clamp_min(torch.finfo(confidence_probs.dtype).tiny).log()
++                    ).sum(dim=-1)
++                else:
++                    entropy = None
+ 
+             changed = False
+             edit_mask = torch.zeros_like(accepted_mask)
+             step_shield_blocked = 0
+             unresolved_mask = (~accepted_mask) & (~prompt_mask)
++            if _fixed:
++                proposal_cast = proposal.to(block_input_ids.dtype)
++                if not was_completed:
++                    accept_mask = self._build_accept_mask_fixed(unresolved_mask, entropy)
++                    denoise_step += 1
++                else:
++                    accept_mask = torch.zeros_like(accepted_mask)
++                    refine_steps += 1
++                if self.allow_accepted_change:
++                    # accepted_before rows are untouched by the accept update, so
++                    # the edit decision can be taken on the pre-update ids
++                    edit_mask = (
++                        accepted_before
++                        & (~prompt_mask)
++                        & (proposal_probs > self.edit_threshold)
++                        & (proposal_cast != block_input_ids)
++                    )
++                accepted_new = accepted_mask | accept_mask
++                # Step status (block done / anything changed) leaves the device
++                # through a pinned non-blocking copy enqueued BEFORE the state
++                # updates: the host wakes up as soon as the masks are known while
++                # the GPU is still applying the updates and the next-step noise.
++                status_dev = torch.stack([accepted_new.all(), accept_mask.any() | edit_mask.any()])
++                self._status_pinned.copy_(status_dev, non_blocking=True)
++                self._status_event.record()
++                block_input_ids.copy_(torch.where(accept_mask, proposal_cast, block_input_ids))
++                q_probs.copy_(torch.where(accept_mask, proposal_probs.float(), q_probs))
++                q_sample_logprobs.copy_(torch.where(accept_mask, sample_logprobs.float(), q_sample_logprobs))
++                if raw_logprobs is not None:
++                    q_raw_logprobs.copy_(torch.where(accept_mask, raw_logprobs.float(), q_raw_logprobs))
++                if self.allow_accepted_change:
++                    block_input_ids.copy_(torch.where(edit_mask, proposal_cast, block_input_ids))
++                    q_probs.copy_(torch.where(edit_mask, proposal_probs.float(), q_probs))
++                    q_sample_logprobs.copy_(torch.where(edit_mask, sample_logprobs.float(), q_sample_logprobs))
++                    if raw_logprobs is not None:
++                        q_raw_logprobs.copy_(torch.where(edit_mask, raw_logprobs.float(), q_raw_logprobs))
++                accepted_mask.copy_(accepted_new)
++                new_accept_mask = accept_mask & ~accepted_before
++                action_mask = (new_accept_mask | edit_mask) & (~prompt_mask)
++                _dev_counts[0].add_(new_accept_mask.sum())
++                _dev_counts[1].add_(edit_mask.sum())
++                # next-step noise for the unresolved rows; a no-op on the values
++                # when the block just completed (every row is accepted)
++                self._refresh_unaccepted_inputs_fixed(
++                    block_input_ids, accepted_mask, block_idx, denoise_step
++                )
++                self._status_event.synchronize()
++                _done, _changed = self._status_pinned.tolist()
++                block_completed_now = bool(_done)
++                changed = bool(_changed)
++                if _tl is not None:
++                    _evD, _hD = _tl_mark()
++                    _tl.append((_evA, _evB, _evC, _evD, _hA, _hB, _hC, _hD))
++                if block_completed_now:
++                    completed_once = True
++                    if not self.allow_accepted_change or self.post_accept_refine_steps <= 0:
++                        break
++                if was_completed and not changed:
++                    break
++                continue
+             if not was_completed:
+                 accept_mask = self._build_accept_mask(
+                     unresolved_mask,
+@@ -2968,6 +3374,10 @@ class SDARPrefixKV(DllmAlgorithm):
+                         )
+                     trace_steps.append(trace_step)
+ 
++            if _tl is not None:
++                _evD, _hD = _tl_mark()
++                _tl.append((_evA, _evB, _evC, _evD, _hA, _hB, _hC, _hD))
++
+             if block_completed_now:
+                 completed_once = True
+                 if not self.allow_accepted_change or self.post_accept_refine_steps <= 0:
+@@ -2982,6 +3392,40 @@ class SDARPrefixKV(DllmAlgorithm):
+             if was_completed and not changed:
+                 break
+ 
++        if _sc_side and self._sc_side_stream is not None:
++            # the last step's side-stream matmul is unused; keep the main stream
++            # ordered behind it before the commit / next block touch the buffers
++            torch.cuda.current_stream().wait_stream(self._sc_side_stream)
++            _sc_pre = None
++        if _post_begun:
++            _pg = self._post_graphs
++            accepted_mask.copy_(_pg.accepted)
++            q_probs.copy_(_pg.q_probs)
++            q_sample_logprobs.copy_(_pg.q_slp)
++            _dev_counts.add_(_pg.counts)
++        if _tl:
++            torch.cuda.synchronize()
++            _n = len(_tl)
++            _g_sc = sum(a.elapsed_time(b) for a, b, c, d, *_ in _tl) / _n
++            _g_fwd = sum(b.elapsed_time(c) for a, b, c, d, *_ in _tl) / _n
++            _g_post = sum(c.elapsed_time(d) for a, b, c, d, *_ in _tl) / _n
++            _g_gap = (
++                sum(_tl[i][3].elapsed_time(_tl[i + 1][0]) for i in range(_n - 1)) / max(_n - 1, 1)
++            )
++            _h_sc = 1000 * sum(hb - ha for *_, ha, hb, hc, hd in _tl) / _n
++            _h_fwd = 1000 * sum(hc - hb for *_, ha, hb, hc, hd in _tl) / _n
++            _h_post = 1000 * sum(hd - hc for *_, ha, hb, hc, hd in _tl) / _n
++            _h_wall = 1000 * (_tl[-1][7] - _tl[0][4]) / _n
++            _g_wall = _tl[0][0].elapsed_time(_tl[-1][3]) / _n
++            print(
++                "[SDAR-STEP-TL] block=%d steps=%d wall_ms/step=%.3f gpu_span/step=%.3f | "
++                "gpu: sc=%.3f fwd=%.3f post=%.3f interstep=%.3f | host: sc=%.3f fwd_enq=%.3f post=%.3f"
++                % (
++                    block_idx, _n, _h_wall, _g_wall, _g_sc, _g_fwd, _g_post, _g_gap, _h_sc, _h_fwd, _h_post,
++                ),
++                flush=True,
++            )
++
+         # The K/V and logits left behind by the last forward describe the final
+         # token ids only if that forward saw them, i.e. nothing was accepted or
+         # edited after it. True on the normal exit above; false when the block
+@@ -3004,6 +3448,10 @@ class SDARPrefixKV(DllmAlgorithm):
+         # Clear adaptive temperature state for this request after block completes.
+         self._clear_adaptive_temp_state(req_pool_idx)
+         self._clear_adaptive_confidence_temp_state(req_pool_idx)
++        if _dev_counts is not None:
++            _na, _ne = _dev_counts.tolist()
++            new_accept_tokens += int(_na)
++            edit_change_tokens += int(_ne)
+         return (
+             logits_output,
+             can_run_cuda_graph,
+@@ -4866,6 +5314,28 @@ class SDARPrefixKV(DllmAlgorithm):
+         forward_batch: ForwardBatch,
+         overlap_fn=None,
+     ) -> Tuple[Union[LogitsProcessorOutput, torch.Tensor], List[torch.Tensor], bool]:
++        if _STEP_TIMELINE:
++            # run()-level timeline: scheduler gap since the previous run() returned,
++            # run() wall, and (via CUDA events) commit-forward GPU time.
++            _rt0 = time.perf_counter()
++            _gap = (_rt0 - _RUN_TL_LAST_EXIT[0]) * 1000 if _RUN_TL_LAST_EXIT[0] else float("nan")
++            self._tl_commit_ms = None
++            self._tl_loop_ms = None
++            try:
++                return self._run_impl(model_runner, forward_batch, overlap_fn)
++            finally:
++                torch.cuda.synchronize()
++                _rt1 = time.perf_counter()
++                _RUN_TL_LAST_EXIT[0] = _rt1
++                print(
++                    "[SDAR-RUN-TL] tokens=%d gap_before_ms=%.2f run_ms=%.2f loop_ms=%s commit_fwd_ms=%s"
++                    % (
++                        int(forward_batch.input_ids.numel()), _gap, 1000 * (_rt1 - _rt0),
++                        "%.2f" % self._tl_loop_ms if self._tl_loop_ms is not None else "-",
++                        "%.2f" % self._tl_commit_ms if self._tl_commit_ms is not None else "-",
++                    ),
++                    flush=True,
++                )
+         if _PROFILE_BLOCK_AT:
+             _PROFILE_BLOCK_SEEN[0] += 1
+             if _PROFILE_BLOCK_SEEN[0] == _PROFILE_BLOCK_AT:
+@@ -4877,6 +5347,9 @@ class SDARPrefixKV(DllmAlgorithm):
+                     ret = self._run_impl(model_runner, forward_batch, overlap_fn)
+                     torch.cuda.synchronize()
+                 wall = 1000 * (time.perf_counter() - _t0)
++                if _PROFILE_BLOCK_TRACE:
++                    prof.export_chrome_trace(_PROFILE_BLOCK_TRACE)
++                    print("[SDAR-PROF-BLOCK] chrome trace -> %s" % _PROFILE_BLOCK_TRACE, flush=True)
+                 ka = prof.key_averages()
+                 cuda_total = sum(getattr(e, "self_device_time_total", getattr(e, "self_cuda_time_total", 0)) for e in ka) / 1000.0
+                 print(
+@@ -4921,8 +5394,14 @@ class SDARPrefixKV(DllmAlgorithm):
+         device = forward_batch.input_ids.device
+         request_spans = self._request_input_spans(forward_batch)
+ 
+-        mask_index = forward_batch.input_ids == self.mask_id
+-        if not bool(mask_index.any()):
++        _host_decode = self._host_decode_block_hint(forward_batch)
++        if _host_decode is None:
++            mask_index = forward_batch.input_ids == self.mask_id
++            _no_mask = not bool(mask_index.any())
++        else:
++            mask_index = None
++            _no_mask = False
++        if _no_mask:
+             if (
+                 self._gpu_replay_force_recycle_at_idle_prefill
+                 and self._gpu_replay_lease_table is not None
+@@ -4999,6 +5478,15 @@ class SDARPrefixKV(DllmAlgorithm):
+         for batch_id, (block_start, block_end) in enumerate(request_spans):
+             block_input_ids = forward_batch.input_ids[block_start:block_end]
+             span_len = int(block_end - block_start)
++            if _host_decode is not None:
++                # fully generated block (scheduler bookkeeping): no prompt rows,
++                # all mask -- identical to the device checks below, without syncs
++                decode_block_mask.append(True)
++                prompt_masks.append(torch.zeros((span_len,), dtype=torch.bool, device=block_input_ids.device))
++                start_list.append(0)
++                req_pool_indices.append(_host_decode)
++                block_indices.append(self._trace_block_idx.get(_host_decode, 0))
++                continue
+             has_mask = bool((block_input_ids == self.mask_id).any())
+             # SGLang can schedule partial extend spans before a full SDAR block
+             # is available. Those spans may contain mask tokens, but SDAR block
+@@ -5130,6 +5618,7 @@ class SDARPrefixKV(DllmAlgorithm):
+                     q_raw_logprobs_by_batch.append(empty_q)
+                     q_sample_logprobs_by_batch.append(empty_q)
+                     continue
++                _tl_l0 = time.perf_counter() if _STEP_TIMELINE else None
+                 (
+                     logits_output,
+                     can_run_cuda_graph,
+@@ -5153,6 +5642,8 @@ class SDARPrefixKV(DllmAlgorithm):
+                     req_pool_indices[batch_id],
+                     start_list[batch_id],
+                 )
++                if _tl_l0 is not None:
++                    self._tl_loop_ms = 1000 * (time.perf_counter() - _tl_l0)
+                 q_probs_by_batch.append(q_probs)
+                 q_raw_logprobs_by_batch.append(q_raw_logprobs)
+                 q_sample_logprobs_by_batch.append(q_sample_logprobs)
+@@ -5212,6 +5703,28 @@ class SDARPrefixKV(DllmAlgorithm):
+                     request_trace_records[batch_id] = trace_record
+                     self._write_trace_record(trace_record)
+ 
++        if self._pending_block_d2h:
++            # previous block's lists: their copies finished long ago (GPU has run
++            # this block's denoise loop since), so this never stalls
++            self._drain_pending_block_d2h()
++        # Next block's token rows for the scheduler, copied to pinned host memory
++        # BEFORE the commit forward is enqueued: the scheduler then reads them
++        # without waiting for the commit (which keeps running on the GPU while
++        # the scheduler and the next block's graph prep do their host work).
++        _host_rows = None
++        _host_rows_ev = None
++        if self._async_capture_worker is None and forward_batch.input_ids.is_cuda:
++            _host_rows = []
++            for _bid, (_bs, _be) in enumerate(request_spans):
++                if not decode_block_mask[_bid]:
++                    _host_rows.append(None)
++                    continue
++                _s = start_list[_bid]
++                _buf = torch.empty((_be - _bs - _s,), dtype=forward_batch.input_ids.dtype, pin_memory=True)
++                _buf.copy_(forward_batch.input_ids[_bs + _s:_be], non_blocking=True)
++                _host_rows.append(_buf)
++            _host_rows_ev = torch.cuda.Event()
++            _host_rows_ev.record()
+         # Commit forward: write final clean tokens into KV cache. With
+         # commit_mode=causal this is a causal clean-x0 pass, matching HF
+         # idlm_block_generate's commit_mask; with commit_mode=bidirectional the
+@@ -5247,10 +5760,24 @@ class SDARPrefixKV(DllmAlgorithm):
+             forward_batch.dllm_is_commit = True
+             forward_batch.dllm_is_denoise = False
+             forward_batch.disable_cuda_graph_once = True
++            if _STEP_TIMELINE:
++                _ce0 = torch.cuda.Event(enable_timing=True); _ce0.record()
+             try:
+-                out = self._forward_without_generic_logprob(model_runner, forward_batch)
++                out = None
++                if (
++                    self._exact_commit is not None
++                    and self._exact_commit.applicable(forward_batch, trace=bool(self._trace_tensors))
++                ):
++                    out = self._exact_commit.run(model_runner, forward_batch)
++                if out is None:
++                    out = self._forward_without_generic_logprob(model_runner, forward_batch)
++                else:
++                    self._bump_true_fwd()
+                 logits_output = out.logits_output
+                 can_run_cuda_graph = out.graph_was_replayed
++                if _STEP_TIMELINE:
++                    _ce1 = torch.cuda.Event(enable_timing=True); _ce1.record(); _ce1.synchronize()
++                    self._tl_commit_ms = _ce0.elapsed_time(_ce1)
+             finally:
+                 forward_batch.dllm_force_causal = old_force_causal
+                 forward_batch.dllm_is_commit = old_is_commit
+@@ -5367,24 +5894,51 @@ class SDARPrefixKV(DllmAlgorithm):
+                         start_offset=int(start_list[batch_id]),
+                     )
+                 out_slice = slice(nonprompt_start, self.block_size)
+-                clean_token_probs = [
+-                    float(x) for x in p_probs[out_slice].detach().float().cpu().tolist()
+-                ]
+-                self._selected_logprobs_by_req[int(req_pool_idx)] = {
+-                    "token_ids": [
+-                        int(x) for x in final_ids[out_slice].detach().cpu().tolist()
+-                    ],
+-                    "raw_logprobs": [
+-                        float(x) for x in q_raw_logprobs[out_slice].detach().cpu().tolist()
+-                    ],
+-                    "sample_logprobs": [
+-                        float(x)
+-                        for x in q_sample_logprobs[out_slice].detach().cpu().tolist()
+-                    ],
+-                    "sample_probs": [
+-                        float(x) for x in q_probs[out_slice].detach().cpu().tolist()
+-                    ],
+-                }
++                if p_probs.is_cuda and not self._trace_dir:
++                    # One pinned, non-blocking D2H for the five per-block lists;
++                    # the host no longer waits here for the commit forward (the
++                    # scheduler gap and the next block's graph prep now overlap
++                    # it). Lists are filled in _drain_pending_block_d2h before
++                    # anyone reads them (next run(), request completion, cleanup).
++                    _n_out = self.block_size - nonprompt_start
++                    _floats = torch.empty((4, _n_out), dtype=torch.float32, pin_memory=True)
++                    _ids = torch.empty((_n_out,), dtype=torch.int64, pin_memory=True)
++                    _stack = torch.stack([
++                        p_probs[out_slice].detach().float(),
++                        q_raw_logprobs[out_slice].detach().float(),
++                        q_sample_logprobs[out_slice].detach().float(),
++                        q_probs[out_slice].detach().float(),
++                    ])
++                    _floats.copy_(_stack, non_blocking=True)
++                    _ids.copy_(final_ids[out_slice].detach().to(torch.int64), non_blocking=True)
++                    _ev = torch.cuda.Event()
++                    _ev.record()
++                    clean_token_probs = []
++                    _selected = {"token_ids": [], "raw_logprobs": [], "sample_logprobs": [], "sample_probs": []}
++                    self._selected_logprobs_by_req[int(req_pool_idx)] = _selected
++                    self._pending_block_d2h.append({
++                        "event": _ev, "floats": _floats, "ids": _ids,
++                        "clean_token_probs": clean_token_probs, "selected": _selected,
++                    })
++                else:
++                    clean_token_probs = [
++                        float(x) for x in p_probs[out_slice].detach().float().cpu().tolist()
++                    ]
++                    self._selected_logprobs_by_req[int(req_pool_idx)] = {
++                        "token_ids": [
++                            int(x) for x in final_ids[out_slice].detach().cpu().tolist()
++                        ],
++                        "raw_logprobs": [
++                            float(x) for x in q_raw_logprobs[out_slice].detach().cpu().tolist()
++                        ],
++                        "sample_logprobs": [
++                            float(x)
++                            for x in q_sample_logprobs[out_slice].detach().cpu().tolist()
++                        ],
++                        "sample_probs": [
++                            float(x) for x in q_probs[out_slice].detach().cpu().tolist()
++                        ],
++                    }
+                 denoise_count = int(request_denoise_forwards[batch_id])
+                 refine_count = (
+                     int(self._last_refine_steps_by_batch[batch_id])
+@@ -5507,12 +6061,21 @@ class SDARPrefixKV(DllmAlgorithm):
+ 
+         next_token_ids_list = []
+         total_new_tokens = 0
++        if _host_rows is not None:
++            _host_rows_ev.synchronize()  # waits for the pre-commit copies only
+         for batch_id, (block_start, block_end) in enumerate(request_spans):
+             if not decode_block_mask[batch_id]:
+-                next_token_ids_list.append(forward_batch.input_ids.new_empty((0,)))
++                next_token_ids_list.append(
++                    [] if _host_rows is not None else forward_batch.input_ids.new_empty((0,))
++                )
+                 continue
+             self._check_decode_span(batch_id, block_start, block_end)
+             start = start_list[batch_id]
++            if _host_rows is not None:
++                next_token_ids = _host_rows[batch_id].tolist()
++                next_token_ids_list.append(next_token_ids)
++                total_new_tokens += len(next_token_ids)
++                continue
+             next_token_ids = forward_batch.input_ids[
+                 block_start + start : block_end
+             ].clone()
+diff --git a/inference/sglang/sglang/srt/layers/attention/flashinfer_backend.py b/inference/sglang/sglang/srt/layers/attention/flashinfer_backend.py
+index cd593b5f..b365285c 100644
+--- a/inference/sglang/sglang/srt/layers/attention/flashinfer_backend.py
++++ b/inference/sglang/sglang/srt/layers/attention/flashinfer_backend.py
+@@ -126,7 +126,11 @@ class FlashInferAttnBackend(AttentionBackend):
+         init_new_workspace: bool = False,
+     ):
+         super().__init__()
+-        self.prefill_backend = "fa2"
++        # SGLANG_FLASHINFER_PREFILL_BACKEND=fa3 switches the paged prefill wrappers
++        # (dLLM denoise attention included) to the Hopper FA3 kernels; numerics
++        # differ from fa2 (different accumulation order). Validated: the paper's
++        # evaluation protocol uses fa3, and re-runs reproduce its numbers.
++        self.prefill_backend = os.environ.get("SGLANG_FLASHINFER_PREFILL_BACKEND", "fa2") or "fa2"
+         self.decode_backend = "fa2"
+ 
+         # Store multi-item scoring delimiter for efficient access
+diff --git a/inference/sglang/sglang/srt/layers/logits_processor.py b/inference/sglang/sglang/srt/layers/logits_processor.py
+index cfd53ac1..1990b039 100644
+--- a/inference/sglang/sglang/srt/layers/logits_processor.py
++++ b/inference/sglang/sglang/srt/layers/logits_processor.py
+@@ -15,6 +15,7 @@
+ 
+ import dataclasses
+ import logging
++import os
+ from typing import Any, Dict, List, Optional, Tuple, Union
+ 
+ import torch
+@@ -59,6 +60,9 @@ from sglang.srt.utils.common import is_npu, use_intel_amx_backend
+ 
+ logger = logging.getLogger(__name__)
+ 
++# SGLANG_DLLM_FULL_LOGITS_KEEP_DTYPE=1: see LogitsProcessor._copy_logits_to_buffer
++_DLLM_FULL_LOGITS_KEEP_DTYPE = os.environ.get("SGLANG_DLLM_FULL_LOGITS_KEEP_DTYPE", "0") == "1"
++
+ _is_npu = is_npu()
+ 
+ 
+@@ -958,6 +962,11 @@ class LogitsProcessor(nn.Module):
+             assert logits_buffer.dtype == torch.float
+             logits_buffer.copy_(logits[:, : self.vocab_size])
+             logits = logits_buffer
++        elif _DLLM_FULL_LOGITS_KEEP_DTYPE and logits_metadata.forward_mode.is_dllm_extend():
++            # dLLM full logits stay in the LM-head dtype (bf16): the SDAR step
++            # kernels upcast per element (exact), so the [tokens, vocab] fp32
++            # materialization per denoise step is skipped.
++            logits = logits[:, : self.vocab_size]
+         else:
+             logits = logits[:, : self.vocab_size].float()
+         return logits
+diff --git a/inference/sglang/sglang/srt/models/sdar.py b/inference/sglang/sglang/srt/models/sdar.py
+index d720a06b..a07b896b 100644
+--- a/inference/sglang/sglang/srt/models/sdar.py
++++ b/inference/sglang/sglang/srt/models/sdar.py
+@@ -4,6 +4,7 @@ SGLang SDARModelLM (block diffusion / dLLM-style forward).
+ """
+ 
+ import logging
++import os
+ from typing import Iterable, Optional, Tuple, Union
+ 
+ import torch
+@@ -53,6 +54,10 @@ from sglang.srt.server_args import get_global_server_args
+ from sglang.srt.utils import add_prefix, is_cuda, make_layers
+ 
+ logger = logging.getLogger(__name__)
++
++# SDAR_FUSED_SC_SOFTMAX=1: fused selected-row softmax for the self-conditioning
++# soft embeddings (values agree with the torch path up to fp32 rounding, not bitwise).
++_FUSED_SC_SOFTMAX = os.environ.get("SDAR_FUSED_SC_SOFTMAX", "0") == "1"
+ _is_cuda = is_cuda()
+ 
+ 
+@@ -639,12 +644,23 @@ class SDARForCausalLM(nn.Module):
+         input_ids: torch.Tensor,
+         prev_logits: Optional[torch.Tensor],
+         self_conditioning_mask: torch.Tensor,
++        selected_indices: Optional[torch.Tensor] = None,
++        selected_all_rows: bool = False,
++        precomputed_signal: Optional[torch.Tensor] = None,
+     ) -> Optional[torch.Tensor]:
++        """selected_indices: optional precomputed nonzero(self_conditioning_mask)
++        (ascending); lets a caller that knows the mask is constant across denoise
++        steps skip the per-step .any()/nonzero device syncs. selected_all_rows:
++        the caller asserts selected_indices == arange(rows) (every row conditioned)."""
+         if (
+             not self.use_self_conditioning
+             or prev_logits is None
+             or self.self_conditioning is None
+-            or not bool(self_conditioning_mask.any())
++            or (
++                selected_indices.numel() == 0
++                if selected_indices is not None
++                else not bool(self_conditioning_mask.any())
++            )
+         ):
+             self._last_self_conditioning_stats = None
+             if getattr(self, "_capture_sdar_trace_tensors", False):
+@@ -655,11 +671,12 @@ class SDARForCausalLM(nn.Module):
+             return None
+ 
+         inputs_embeds = self.model.embed_tokens(input_ids)
+-        selected_indices = torch.nonzero(
+-            self_conditioning_mask, as_tuple=False
+-        ).flatten()
+-        if selected_indices.numel() == 0:
+-            return inputs_embeds
++        if selected_indices is None:
++            selected_indices = torch.nonzero(
++                self_conditioning_mask, as_tuple=False
++            ).flatten()
++            if selected_indices.numel() == 0:
++                return inputs_embeds
+ 
+         direct_capture_span = getattr(
+             self,
+@@ -706,10 +723,48 @@ class SDARForCausalLM(nn.Module):
+         embed_weight = embed_tokens.weight
+         flat_signal = signal.view(-1, signal.size(-1))
+         flat_logits = prev_logits.view(-1, prev_logits.size(-1))
++        # every row selected, in order, in one chunk: the row gather is the
++        # identity, so the [rows, vocab] index_select copy and the zeros +
++        # index_copy_ of the signal are skipped (same values, same kernels).
++        all_rows = bool(
++            selected_all_rows
++            and selected_indices.numel() == flat_logits.shape[0]
++            and selected_indices.numel() <= chunk_size
++            and signal_page is None
++        )
++        if (
++            precomputed_signal is not None
++            and selected_all_rows
++            and selected_indices.numel() == flat_logits.shape[0]
++            and signal_page is None
++        ):
++            # softmax(prev_logits) @ E for every row was already computed by the
++            # caller with the same chunking (same ops, possibly on another CUDA
++            # stream); the loop below would recompute exactly this tensor
++            signal = precomputed_signal.view_as(signal)
++            flat_signal = signal
++            selected_indices = selected_indices[:0]  # skip the chunk loop
+         for start in range(0, selected_indices.numel(), chunk_size):
+             indices = selected_indices[start : start + chunk_size]
+-            logits = flat_logits.index_select(0, indices).float()
+-            probs = F.softmax(logits, dim=-1).to(embed_weight.dtype)
++            if all_rows:
++                logits = flat_logits.float()
++                probs = F.softmax(logits, dim=-1).to(embed_weight.dtype)
++            elif selected_all_rows and selected_indices.numel() == flat_logits.shape[0]:
++                # every row selected in order: this chunk's indices are the
++                # contiguous range [start, start+len) -- a slice view carries the
++                # same values as index_select's copy and softmax on it is
++                # bitwise identical (verified), minus the [chunk, vocab] copy
++                logits = flat_logits[start : start + indices.numel()].float()
++                probs = F.softmax(logits, dim=-1).to(embed_weight.dtype)
++            elif _FUSED_SC_SOFTMAX and flat_logits.is_cuda:
++                # one Triton pass: softmax of the selected rows written straight in
++                # the embedding dtype (no index_select copy / fp32 softmax / cast)
++                from sglang.srt.dllm.algorithm.fused_step_kernels import sc_softmax_rows
++
++                probs = sc_softmax_rows(flat_logits, indices, embed_weight.dtype)
++            else:
++                logits = flat_logits.index_select(0, indices).float()
++                probs = F.softmax(logits, dim=-1).to(embed_weight.dtype)
+             if probs.size(-1) == embed_weight.size(0):
+                 soft_embeddings = probs.matmul(embed_weight)
+             elif hasattr(embed_tokens, "shard_indices"):
+@@ -737,7 +792,11 @@ class SDARForCausalLM(nn.Module):
+                     f"logits_vocab={probs.size(-1)} embed_rows={embed_weight.size(0)}"
+                 )
+             soft_embeddings = soft_embeddings.to(inputs_embeds.dtype)
+-            flat_signal.index_copy_(0, indices, soft_embeddings)
++            if all_rows:
++                signal = soft_embeddings.view_as(signal)
++                flat_signal = signal
++            else:
++                flat_signal.index_copy_(0, indices, soft_embeddings)
+             if signal_page is not None:
+                 signal_page.index_copy_(
+                     0,

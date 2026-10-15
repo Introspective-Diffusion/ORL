@@ -1,0 +1,30 @@
+{
+  "schema_version": 2,
+  "source": "The paper's main table: accuracy in percent and tokens per forward (TPF) of each family's TPF counter",
+  "table": {
+    "qwen-dlm.base.gsm8k": {"paper": {"accuracy_pct": 90.4, "tpf": 2.4}},
+    "qwen-dlm.base.math500": {"paper": {"accuracy_pct": 88, "tpf": 2.1}},
+    "qwen-dlm.base.humaneval": {"paper": {"accuracy_pct": 82.9, "tpf": 1.8}},
+    "qwen-dlm.base.mbpp": {"paper": {"accuracy_pct": 79.2, "tpf": 2.1}},
+    "qwen-dlm.orl.gsm8k": {"paper": {"accuracy_pct": 92.4, "tpf": 5.9}},
+    "qwen-dlm.orl.math500": {"paper": {"accuracy_pct": 92.2, "tpf": 5.8}},
+    "qwen-dlm.orl.humaneval": {"paper": {"accuracy_pct": 89.6, "tpf": 11.1}},
+    "qwen-dlm.orl.mbpp": {"paper": {"accuracy_pct": 79.4, "tpf": 8}},
+    "llada.base.gsm8k": {"paper": {"accuracy_pct": 91.9, "tpf": 5.6}},
+    "llada.base.math500": {"paper": {"accuracy_pct": 84.6, "tpf": 8.2}},
+    "llada.base.humaneval": {"paper": {"accuracy_pct": 86.6, "tpf": 11.3}},
+    "llada.base.mbpp": {"paper": {"accuracy_pct": 77.5, "tpf": 7.7}},
+    "llada.orl.gsm8k": {"paper": {"accuracy_pct": 92, "tpf": 8.5}},
+    "llada.orl.math500": {"paper": {"accuracy_pct": 87, "tpf": 10.2}},
+    "llada.orl.humaneval": {"paper": {"accuracy_pct": 89, "tpf": 13.1}},
+    "llada.orl.mbpp": {"paper": {"accuracy_pct": 77.3, "tpf": 10.3}},
+    "dg.base.gsm8k": {"paper": {"accuracy_pct": 95.8, "tpf": 26}},
+    "dg.base.math500": {"paper": {"accuracy_pct": 92.3, "tpf": 23.7}},
+    "dg.base.humaneval": {"paper": {"accuracy_pct": 90.9, "tpf": 24.5}},
+    "dg.base.mbpp": {"paper": {"accuracy_pct": 87.7, "tpf": 23.1}},
+    "dg.orl.gsm8k": {"paper": {"accuracy_pct": 96, "tpf": 30}},
+    "dg.orl.math500": {"paper": {"accuracy_pct": 92.3, "tpf": 27.4}},
+    "dg.orl.humaneval": {"paper": {"accuracy_pct": 91.9, "tpf": 27.9}},
+    "dg.orl.mbpp": {"paper": {"accuracy_pct": 87.4, "tpf": 28.7}}
+  }
+}

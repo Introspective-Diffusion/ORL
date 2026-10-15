@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "suite": "transfer",
+  "status": "Validated transfer matrix",
+  "models": ["llada-base", "llada-orl", "dg-base", "dg-orl"],
+  "benchmarks": {"aime": {"n": 60, "score_subsets": {"aime24": 30, "aime25": 30}, "subset_field": "meta.year"}, "gpqa": {"n": 198}, "mmlu_pro": {"n": 12032}, "lcb": {"n": 175}, "ifeval": {"n": 541}},
+  "seeds_by_family": {"llada": [12345], "dg": [1234, 1235, 1236]},
+  "seed_overrides": {"aime": {"llada": [12345, 12346, 12347, 12348, 12349, 12350, 12351, 12352], "dg": [1234, 1235, 1236, 1237, 1238, 1239, 1240, 1241]}, "gpqa": {"llada": [12345, 12346, 12347], "dg": [1234, 1235, 1236]}},
+  "partition_default": {"count": 1, "kind": "modulo"},
+  "partition_overrides": {"mmlu_pro": {"count": 16, "kind": "modulo"}},
+  "worker_grouping": "One model/benchmark/seed/shard; each AIME generation run yields two 30-task year scores",
+  "scoring": {"aime": "original numeric parser separately per year", "gpqa": "original unanchored MC parser preserved", "mmlu_pro": "original unanchored MC parser preserved", "lcb": "frozen execution scorer and tests in credential-free sandbox", "ifeval": "frozen instruction evaluator", "seed_aggregation": "equal per-run mean and sample SD; AIME8, GPQA3, other LL1/DG3", "efficiency": "clean per-response mean TPF; per-run pooled TPS then equal run means"},
+  "scorer_pins": {"original_numeric_scorer_sha256": "501dbdb10cd7e16e366aeb376f8ceefd87ce5ed2ad0260e8bbdf5a007331c1ce", "lcb_candidate_revision": "93fcea9b43e292fe26121ad509d6e868f70b01e3", "lcb_tests_sha256": "d3b2da8f72842657dbc6809b76acfbcaaf7505b7cc4ea6c5a4f51afd40e0ac04", "ifeval_candidate_revision": "78ca8a4d1c5fbe9acb862369690e2861a51951f1", "candidate_rng_seed": 0},
+  "expected": {"generation_runs": 68, "scored_run_cells": 100, "displayed_cells": 24, "benchmark_shards": 188, "worker_groups": 188, "generated_rows": 106280},
+  "assets_env": "PAPER_TRANSFER_INPUTS_ROOT"
+}

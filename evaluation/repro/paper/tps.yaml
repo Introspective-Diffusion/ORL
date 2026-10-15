@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "suite": "tps",
+  "status": "Quick same-GPU TPS check (quick-v1)",
+  "models": ["qwen-dlm-base", "qwen-dlm-orl", "llada-base", "llada-orl", "dg-base", "dg-orl"],
+  "benchmarks": {"gsm8k": {"n": 1319}, "humaneval": {"n": 164}},
+  "seeds_by_family": {"qwen-dlm": [1234], "llada": [12345], "dg": [1234]},
+  "partition_default": {"count": 1, "kind": "selected_hash"},
+  "selection": {"hash": "sha256('tps-quick-v1|'+benchmark+'|'+str(numeric_task_id))", "order": "ascending hex digest", "warmup_per_benchmark": 1, "measured_per_benchmark": 8, "repeats": 1},
+  "worker_grouping": "One same-GPU pair per family, serial Base then ORL; within arm GSM8K then HumanEval",
+  "timing": {"clock": "perf_counter unrounded seconds", "exclude": ["model load", "engine initialization", "explicit warmup", "scoring"], "qwen-dlm": "HTTP _generate includes response parse; prompt build outside", "llada": "engine.generate(render(prompt), params), render inside", "dg": "HTTP request boundary", "aggregation": "clean pooled TPS per benchmark, equal two-benchmark mean per arm, then ratio of means", "diagnostics": ["mean per-response TPS", "common-clean TPS", "all-request TPS", "collapse count"], "limitations": ["one repeat", "fixed Base-first order", "eight-task subset is not full-dataset distribution", "not comparable absolute engine speed across families"]},
+  "expected": {"generation_runs": 12, "scored_run_cells": 12, "displayed_cells": 12, "benchmark_shards": 12, "worker_groups": 3, "generated_rows": 108, "measured_rows": 96},
+  "assets_env": "PAPER_MAIN_INPUTS_ROOT"
+}

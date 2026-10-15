@@ -1,0 +1,172 @@
+# LLaDA-2.1-mini AEC base config.
+#
+# Derived key by key from QwenDLM-4B-postnorm002-DAPO-sglang-noedit-cwppo-smoke.yaml, changing only
+# what has to change: model path, override_config (residual + two conventions), block 32,
+# mask_token_id, SGLang path and decoder yaml, run identifiers, reward.
+#
+# Most values here are overridden by the recipe's Hydra overrides (later overrides win); they are
+# kept so that this config is self-consistent on its own. The values in effect are the ones in
+# training/recipes/llada2_mini.
+#
+# LLaDA-2.1-mini runs use DP8 (ulysses_sequence_parallel_size=1). SP>1 is rejected for this model: verl's
+# Ulysses wrapper covers the fast attention kernel but not the overlay's torch fallback, and SP>1 was never validated.
+hydra:
+  searchpath:
+    - file://verl/trainer/config
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+actor_rollout_ref:
+  model:
+    path: ???  # set by the recipe
+    trust_remote_code: true
+    enable_gradient_checkpointing: true
+    use_remove_padding: true
+    override_config:
+      # Turns the residual on. The overlay gates the adapter on this key; without it there is no residual.
+      use_self_conditioning: true
+      # down_proj zero-initialized -> step 0 is bit-identical to stock LLaDA, so the wiring can be checked exactly.
+      self_conditioning_zero_init: true
+      self_conditioning_prob: 0.0
+      # post_norm off: when on, it rewrites inputs_embeds even with a zero residual and contaminates the control arm.
+      # (SDAR uses true + scale 0.02, because its checkpoint was trained that way)
+      self_conditioning_post_norm: false
+      self_conditioning_residual_scale: 1.0
+      # Model-side one-position shift. dp_actor passes shift_noisy_logits = not use_ulysses_sp,
+      # which is True with SP=1 -- but LLaDA2's convention is no shift, and the rollout side has it off as well
+      # (logits_shift: false). Both sides must agree, otherwise the training target and the decode are off by one.
+      training_logits_shift: false
+
+  actor:
+    strategy: fsdp
+    block_length: 32
+    ppo_mini_batch_size: 1
+    use_dynamic_bsz: true
+    ppo_max_token_len_per_gpu: 4096
+    ppo_epochs: 1
+    show_progress: false
+    compute_old_log_prob_entropy: false
+    use_raw_replay_log_probs: true
+    use_rollout_log_probs: true
+    report_rollout_corr_metrics: false
+    confidence_weighted_ppo:
+      enable: true
+      threshold: 0.0
+      min_weight: 0.0
+      max_weight: 1.0
+    clip_ratio_low: 0.2
+    clip_ratio_high: 0.28
+    clip_ratio_c: 10.0
+    loss_agg_mode: token-mean
+    grad_clip: 1.0
+    fsdp_config:
+      reshard_after_forward: false
+      model_dtype: bfloat16
+      param_offload: false
+      optimizer_offload: true
+    optim:
+      lr: 1.0e-6
+      weight_decay: 0.1
+      lr_warmup_steps: 0
+
+  rollout:
+    name: sglang
+    temperature: 0.6
+    top_k: -1
+    top_p: 1.0
+    do_sample: true
+    n: 1
+    response_length: 256
+    calculate_log_probs: true
+    gpu_memory_utilization: 0.55
+    enforce_eager: true
+    tensor_model_parallel_size: 1
+    max_num_batched_tokens: 4096
+    max_model_len: 2048
+    max_num_seqs: 4
+    load_format: dummy
+    log_prob_use_dynamic_bsz: true
+    log_prob_max_token_len_per_gpu: 4096
+    engine_kwargs:
+      mask_token_id: 156895   # LLaDA2 vocabulary size: 157184
+      block_length: 32
+      sglang:
+        patched_sglang_path: ???  # set by the recipe
+        dllm_algorithm: SDARPrefixKV
+        dllm_algorithm_config: ???  # set by the recipe
+        attention_backend: flashinfer
+        chunked_prefill_size: -1
+        served_model_name: llada2
+        enable_memory_saver: false
+    val_kwargs:
+      do_sample: false
+      n: 1
+    agent:
+      num_workers: 1
+    checkpoint_engine:
+      backend: naive
+      update_weights_bucket_megabytes: 512
+
+data:
+  train_files: data/smoke_math4.parquet
+  val_files: data/smoke_math4.parquet
+  train_max_samples: 2
+  val_max_samples: 2
+  gen_batch_size: 1
+  train_batch_size: 1
+  val_batch_size: 1
+  max_prompt_length: 512
+  shuffle: false
+  seed: 10086
+  trust_remote_code: true
+  filter_overlong_prompts: true
+  filter_overlong_prompts_workers: 1
+  dataloader_num_workers: 0
+
+algorithm:
+  adv_estimator: grpo
+  gamma: 1.0
+  lam: 1.0
+  norm_adv_by_std_in_grpo: true
+  filter_groups:
+    enable: false
+    max_num_gen_batches: 1
+    metric: acc
+
+trainer:
+  total_epochs: 1
+  total_training_steps: 1
+  save_freq: -1
+  test_freq: -1
+  project_name: dLLM-RL-LLaDA2-AEC
+  experiment_name: LLaDA2-mini-AEC-sglang
+  logger: [console]
+  default_local_dir: ./checkpoints/LLaDA2-mini-AEC-sglang
+  rollout_data_dir: ./rollouts/LLaDA2-mini-AEC-sglang
+  n_gpus_per_node: 1
+  nnodes: 1
+  use_legacy_worker_impl: enable
+  balance_batch: false
+  val_before_train: false
+  validation_data_dir: ./checkpoints/LLaDA2-mini-AEC-sglang/validation
+
+reward_model:
+  reward_manager: dapo
+  overlong_buffer:
+    enable: false
+    len: 0
+    penalty_factor: 0.0
+
+reward:
+  num_workers: 1
+
+custom_reward_function:
+  path: ./verl/utils/reward_score/gsm8k_training_reward.py
+  name: compute_score
+
+ray_kwargs:
+  ray_init:
+    address: local
+    num_cpus: 16

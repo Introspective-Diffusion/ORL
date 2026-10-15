@@ -1,0 +1,22 @@
+# Gemma4Renoise rollout sampler for DiffusionGemma ORL training (SGLang fork in training/sglang_dgemma).
+# 256-token canvas, at most 48 denoising steps, async intermediate-state replay capture,
+# entropy bound 0.1, temperature schedule 0.8 -> 0.4. No fixed seed: each decode draws a
+# fresh seed, so the 8 rollouts of a prompt differ.
+# Source: decoder config of the paper run (research repository commit 028ce292).
+block_size: 256
+max_denoising_steps: 48
+intermediate_replay: true
+intermediate_replay_async:
+  queue_depth: 1024
+  queue_max_bytes: 2147483648
+  backpressure_policy: block
+  enqueue_timeout_s: 300
+  drain_timeout_s: 300
+sampler_config:
+  entropy_bound: 0.1
+temperature_schedule:
+  t_min: 0.4
+  t_max: 0.8
+stopping_config:
+  confidence_threshold: 0.005
+  stability_threshold: 1

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fast-diffusion-attention"
+version = "0.1.2"
+description = "GPU-accelerated attention kernels for diffusion language model training"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = [
+    "torch>=2.0",
+    "triton>=3.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+]
+benchmark = [
+    "flash-attn>=2.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["fast_diffusion_attention*"]

@@ -1,0 +1,22 @@
+# core training
+transformers>=4.49.0,<=4.55.0,!=4.52.0
+datasets>=2.16.0,<=3.6.0
+accelerate>=1.3.0,<=1.7.0
+peft>=0.14.0,<=0.15.2
+tokenizers>=0.19.0,<=0.21.1
+safetensors<=0.5.3
+trl>=0.8.6,<=0.9.6
+deepspeed>=0.10.0,<=0.16.9
+# numerical
+numpy<2.0.0
+scipy
+einops
+# config and utils
+pyyaml
+packaging
+omegaconf
+# plotting
+matplotlib>=3.7.0
+# logging
+wandb
+# flash-attn (install separately: pip install flash-attn --no-build-isolation)

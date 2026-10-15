@@ -1,0 +1,31 @@
+# SDARPrefixKV rollout decoder for QwenDLM (SDAR, block 256) ORL training.
+# Entropy-bound acceptance (0.4 nats), edit threshold 0.9, random-vocab noise, step_linear
+# confidence temperature 1.0 -> 0.6 (-0.01 per forward), sampling temperature 1.0.
+# Source: decoder config of the paper run (research repository commit bec3c84b).
+block_size: 256
+denoising_steps: 256
+accept_rule: entropy_bound
+entropy_bound: 0.4
+confidence_temperature: 1.0
+confidence_temperature_mode: step_linear
+confidence_temperature_max: 1.0
+confidence_temperature_min: 0.6
+confidence_temperature_step_decrement: 0.01
+noise_mode: random_vocab
+random_token_high: 151669
+deterministic_randtok: true
+randtok_seed: 12345
+allow_accepted_change: true
+edit_threshold: 0.9
+force_accept_leftmost: true
+post_accept_refine_steps: 0
+max_steps_per_block: 256
+temperature: 1.0
+top_k: 0
+top_p: 1.0
+causal_prefill: true
+self_conditioning_post_norm: true
+active_input_mode: exact
+adjacent_entropy_contraction: true
+edit_shield_eos: false
+edit_shield_eos_window: 0

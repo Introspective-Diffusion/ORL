@@ -1,0 +1,412 @@
+# Format checks enforced on CI:
+# 1. Comments must appear above each field.
+# 2. There must be a blank line between each field.
+# 3. Inline comments (after a field on the same line) are not allowed.
+# 4. Indentation level is respected for nested fields.
+
+# specify the default per-component configs
+defaults:
+
+  - model_engine: dp
+
+  # <folder_name>@<field_name>.<field_name>: <yaml_file_name>
+  # actor_rollout_ref.actor: trainer/config/actor/dp_actor.yaml
+  - actor@actor_rollout_ref.actor: ${model_engine}_actor
+
+  # data: trainer/config/data/legacy_data.yaml
+  - data@data: legacy_data
+
+  # Reference model config.
+  # Reference model will be enabled when actor.use_kl_loss or/and algorithm.use_kl_in_reward is/are True.
+  - ref@actor_rollout_ref.ref: ${model_engine}_ref
+
+  # Rollout model config.
+  - rollout@actor_rollout_ref.rollout: rollout
+
+  # Model config.
+  - model@actor_rollout_ref.model: hf_model
+
+  # Critic model config.
+  - critic@critic: ${model_engine}_critic
+
+  # legacy reward impl config, for backward compatibility
+  - legacy_reward_impl
+
+  # Reward config.
+  - reward@reward: reward
+
+  # Rollout correction config.
+  - algorithm@algorithm.rollout_correction: rollout_correction
+
+  # load the reference default config, then apply the fields in the current yaml
+  # self config override anything above
+  - _self_
+
+# config for actor, rollout and reference model
+actor_rollout_ref:
+
+  # Whether it's a hybrid engine, currently only supports hybrid engine
+  hybrid_engine: true
+
+  # Timeout for operations executed against the process group
+  nccl_timeout: 600
+
+  # Rollout model config.
+  rollout:
+
+    # for huge model, layered summon can save memory (prevent OOM) but make it slower
+    layered_summon: False
+
+# config for the algorithm
+algorithm:
+
+  # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+  _target_: verl.trainer.config.AlgoConfig
+
+  # Discount factor for future rewards
+  gamma: 1.0
+
+  # Trade-off between bias and variance in the GAE estimator
+  lam: 1.0
+
+  # Advantage estimator type: "gae", "grpo", "reinforce_plus_plus", etc.
+  adv_estimator: gae
+
+  # Whether to normalize advantages by std (specific to GRPO)
+  norm_adv_by_std_in_grpo: True
+
+  # Whether to enable in-reward KL penalty
+  use_kl_in_reward: False
+
+  # How to estimate KL divergence: "kl", "abs", "mse", "low_var_kl", or "full"
+  kl_penalty: kl
+
+  # KL control configuration
+  kl_ctrl:
+
+    # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+    _target_: verl.trainer.config.KLControlConfig
+
+    # KL control type: "fixed" or "adaptive"
+    type: fixed
+
+    # Initial coefficient for KL penalty
+    kl_coef: 0.001
+
+    # Horizon value for adaptive controller (if enabled)
+    horizon: 10000
+
+    # Target KL divergence (used for adaptive controller)
+    target_kl: 0.1
+
+  # Whether to enable preference feedback PPO
+  use_pf_ppo: False
+
+  # Preference feedback PPO settings
+  pf_ppo:
+
+    # Method for reweighting samples: "pow", "max_min", or "max_random"
+    reweight_method: pow
+
+    # Power used for weight scaling in "pow" method
+    weight_pow: 2.0
+
+# config for the trainer
+trainer:
+
+  # Whether to balance batch sizes across distributed workers
+  balance_batch: True
+
+  # Number of epochs in training
+  total_epochs: 30
+
+  # Total training steps (can be set explicitly or derived from epochs)
+  total_training_steps: null
+
+  # Project name for experiment tracking (e.g., wandb)
+  project_name: verl_examples
+
+  # Experiment name for run identification in tracking tools
+  experiment_name: gsm8k
+
+  # Logging backends to use: "console", "wandb", etc.
+  logger: ["console", "wandb"]
+
+  # Number of generations to log during validation
+  log_val_generations: 0
+
+  # Directory for logging rollout data; no dump if null
+  rollout_data_dir: null
+
+  # Directory for logging validation data; no dump if null
+  validation_data_dir: null
+
+  # Number of nodes used in the training
+  nnodes: 1
+
+  # Number of GPUs per node
+  n_gpus_per_node: 8
+
+  # Experimental split: rollout runs on one GPU subgroup and actor training runs
+  # on another subgroup. Disabled by default.
+  split_gpu_streaming:
+    enable: false
+    rollout_gpus: 4
+    actor_gpus: 4
+    # If true, split each physical node between rollout and actor instead of
+    # assigning contiguous whole-node bundle ranges.
+    per_node_split: false
+    # If true, create rollout replay queues pinned to each agent-loop worker node
+    # AND automatically activate node-local actor dispatch (NodeLocalT5Consumer).
+    # Each consumer pulls direct-compact items from the local queue, builds tensor
+    # batches in-process (so node-local SHM handles are valid), and dispatches to
+    # local actor rank handles — avoiding cross-node tensor transfer.
+    # FSDP assumption: HYBRID_SHARD (within-node shard group). Do NOT use with
+    # FULL_SHARD spanning multiple nodes (would deadlock on per-forward all-gather).
+    node_local_replay: false
+    # Override: explicitly enable/disable node-local actor dispatch independent of
+    # node_local_replay. Setting node_local_replay=true implies this; set to false
+    # to use per-node queues but keep the central consumer (debug/fallback only).
+    node_local_actor_dispatch: false
+    # If true, actor FSDP shards only within each node and synchronizes replica
+    # gradients once at optimizer step. Intended for node-local actor dispatch.
+    node_local_delayed_grad_sync: false
+    overlap_pipeline: false
+    replay_queue_chunk_size: 64
+    replay_queue_pull_max_items: 8
+    # Node-local actor consumer flushes pending ready rows after this many ms.
+    # 0 preserves the old behavior: flush only when enough rows arrive or queue closes.
+    node_local_consumer_flush_timeout_ms: 0
+    # Maximum actor chunks each node-local consumer may keep submitted but not yet drained.
+    # Keep this >1 so node-local replay can overlap actor compute instead of
+    # synchronously waiting after every chunk.
+    node_local_consumer_max_inflight_chunks: 4
+    # 0 leaves the rollout-to-actor replay queue unbounded. >0 applies backpressure
+    # when actor-side gradient consumption falls behind rollout production.
+    replay_queue_max_items: 0
+    # Optional SGLang-to-agent raw replay queue cap. Keep 0 unless end-to-end
+    # backpressure is needed to stop raw replay chunks from accumulating upstream.
+    raw_replay_queue_max_items: 0
+    # Maximum raw SGLang replay chunks to pull per queue pop. The queue returns
+    # as soon as any item is available; larger values reduce Ray queue overhead.
+    raw_replay_queue_pull_max_items: 8
+    consume_max_inflight_chunks: 4
+    tensor_replay_row_chunk_size: 64
+    # Outer block-batch chunk size for finalized DiffusionGemma replay.
+    gemma_replay_block_chunk_size: 1
+    tensor_replay_empty_cache: false
+    # Match trace_all_ce token-mean semantics for split tensor replay chunks.
+    tensor_replay_grad_rescale_basis: active_tokens
+    ray_put_tensor_chunks: false
+    # Trainer-to-actor tensor chunk transport: tensor or shm.
+    # shm sends small shared-memory handles and lets actor ranks materialize CPU
+    # tensors locally. Set this back to tensor for the compatibility/debug Ray
+    # method-argument path.
+    actor_tensor_chunk_store: shm
+    # Trainer-to-actor tensor chunk dispatch. dp shards rows across actor ranks,
+    # matching update_actor's data-parallel semantics; one_to_all keeps the old
+    # replicated debug path.
+    actor_tensor_chunk_dispatch: dp
+    # Compress rollout_logits_source_hidden in trainer-to-actor chunks as
+    # active-position sparse values. The actor expands it on device before the
+    # existing trace_future_ce loss path, reducing SHM/H2D bytes without changing
+    # the loss semantics.
+    actor_sparse_logits_source_hidden: true
+    # Transport for agent-to-trainer direct compact replay tensors: tensor or shm.
+    # shm is the current recommended high-performance default for single-node split streaming.
+    # Set this back to tensor for the compatibility/debug Ray payload path.
+    direct_compact_replay_tensor_store: shm
+    # Trim direct compact replay rows to the active local tail block.
+    direct_compact_local_tail: true
+    # Debug-only: additionally render full-tail direct compact batches and compare semantics.
+    direct_compact_local_tail_parity_check: false
+    # Debug-only: in manifest mode, also render the same direct compact specs with
+    # trace_all_ce to compare hard-future row/target coverage against baseline CE.
+    direct_compact_shadow_trace_all_manifest: false
+    # Debug-only compact T5 tensor full-vs-row-chunk grad parity. Disabled by default; zero training cost.
+    tensor_grad_parity_check: false
+    tensor_grad_parity_max_steps: 1
+    # Debug-only parity dry-run input row cap; 0 or negative disables truncation.
+    tensor_grad_parity_max_rows: 16
+    tensor_grad_parity_chunk_size: 0
+    tensor_grad_parity_sample_params: 64
+    tensor_grad_parity_sample_elems_per_param: 256
+    # Debug-only parity tolerance for BF16/chunk-shape numerical differences.
+    tensor_grad_parity_atol: 1.0e-4
+    tensor_grad_parity_rtol: 1.0e-2
+    tensor_grad_parity_raise: true
+    # Debug-only compact T5 tensor trace_all_ce vs trace_future hard-label CE
+    # gradient parity on the same rendered tensor batch. Disabled by default.
+    objective_grad_parity_check: false
+    objective_grad_parity_max_steps: 1
+    objective_grad_parity_max_rows: 16
+    objective_grad_parity_sample_params: 64
+    objective_grad_parity_sample_elems_per_param: 256
+    objective_grad_parity_atol: 1.0e-4
+    objective_grad_parity_rtol: 1.0e-2
+    objective_grad_parity_raise: true
+    skip_weight_sync: false
+
+  # Save frequency (by iteration) for model checkpoints
+  save_freq: -1
+
+  # ESI refers to the elastic server instance used during training, similar to the training plan. For example,
+  # if you purchase 10 hours of computing power, the ESI will automatically shut down after 10 hours of training.
+  # To ensure a checkpoint is saved before ESI shuts down, the system will start saving a checkpoint in advance.
+  # The advance time is calculated as: Advance Time = Longest historical step duration + Checkpoint save duration + esi_redundant_time.
+  # Here, esi_redundant_time is a user-defined value that further extends the advance time for added safety.
+  esi_redundant_time: 0
+
+  # Resume mode: "auto", "disable", or "resume_path"
+  # "auto": resume from last checkpoint if available
+  # "disable": start from scratch
+  # "resume_path": resume from a user-defined path
+  resume_mode: auto
+
+  # Path to resume training from (only used when resume_mode is "resume_path")
+  resume_from_path: null
+
+  # Whether to run validation before training begins
+  val_before_train: True
+
+  # Whether to run validation only
+  val_only: False
+
+  # Validation frequency (in training iterations)
+  test_freq: -1
+
+  # Number of iterations to warm up the critic before updating policy
+  critic_warmup: 0
+
+  # Default path to distributed filesystem for saving checkpoints
+  default_hdfs_dir: null
+
+  # Whether to delete local checkpoints after loading
+  del_local_ckpt_after_load: False
+
+  # Default local directory for saving checkpoints
+  default_local_dir: checkpoints/${trainer.project_name}/${trainer.experiment_name}
+
+  # Maximum number of actor checkpoints to keep
+  max_actor_ckpt_to_keep: null
+
+  # Maximum number of critic checkpoints to keep
+  max_critic_ckpt_to_keep: null
+
+  # Timeout (in seconds) for Ray worker to wait for registration
+  ray_wait_register_center_timeout: 300
+
+  # Device to run training on (e.g., "cuda", "cpu")
+  device: cuda
+
+  # whether to use legacy worker implementation
+  #  mode: "auto", "enable", or "disable"
+  use_legacy_worker_impl: auto
+
+# profiler configs
+global_profiler:
+
+  # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+  _target_: verl.utils.profiler.ProfilerConfig
+
+  # Profiling tool: choose between nsys, npu, torch, torch_memory
+  tool: null
+
+  # profile steps
+  steps: null
+
+  # Whether to combine continuous steps into one database.
+  ## If True, worker.profiler.discrete must be False, [1,2] in one, [5] in another.
+  ## If False, [1] in one, [2] in another, [5] in another.
+  profile_continuous_steps: False
+
+  # Path to save profiling contents
+  save_path: "outputs/profile"
+
+  # Specific tool configs, can use +profiler.tool_config.[tool].xxx to config
+  global_tool_config:
+
+    # nsys config
+    nsys:
+
+      # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+      _target_: verl.utils.profiler.config.NsightToolConfig
+
+      # True for each task has its own database, False for all tasks in one training step share one database.
+      discrete: False
+
+      # controller Nvidia Nsight Systems Options. Must set when profile_steps is not None.
+      ## reference https://docs.nvidia.com/nsight-systems/UserGuide/index.html
+      ## reference https://docs.ray.io/en/latest/ray-observability/user-guides/profiling.html
+      controller_nsight_options:
+
+        # Select the API(s) to be traced.
+        trace: "cuda,nvtx,cublas,ucx"
+
+        # Track the GPU memory usage by CUDA kernels. Must be string type "true" or "false".
+        cuda-memory-usage: "true"
+
+        # CUDA graphs will be traced as a whole
+        cuda-graph-trace: "graph"
+
+      # worker Nvidia Nsight Systems Options. Must set when profile_steps is not None.
+      worker_nsight_options:
+
+        # Select the API(s) to be traced.
+        trace: "cuda,nvtx,cublas,ucx"
+
+        # Track the GPU memory usage by CUDA kernels. Must be string type "true" or "false".
+        cuda-memory-usage: "true"
+
+        # CUDA graphs will be traced as a whole
+        cuda-graph-trace: "graph"
+
+        # Profiling only in a range of torch.cuda.profiler.start and stop. Do not change this config.
+        capture-range: "cudaProfilerApi"
+
+        # Specify the desired behavior when a capture range ends.
+        # In verl we need the torch.cuda.profiler.start/stop pair to repeats n times.
+        # valid values are "repeat-shutdown:n" or null.
+        # For normal whole step profiling, n = len(profile_steps);
+        # but for discrete profiling, n = len(profile_steps) * Number(subtasks).
+        # Or you can just leave it null and the program will use n = len(profile_steps) * 6;
+        capture-range-end: null
+
+        # Send signal to the target application's process group. We let the program to exit by itself.
+        kill: none
+
+    # enable memory visualization for debugging memory usage
+    torch_memory:
+
+      #  Maximum number of allocation entries to record
+      trace_alloc_max_entries: 100_000
+
+      # The depth of the call stack to capture for each allocation
+      stack_depth: 32
+
+      # 'alloc': records only allocation events || 'state': records memory state changes || 'all': records both.
+      context: "all"
+
+      # 'python': records Python stacks || 'cpp': records C++ stacks (available in some versions) || 'all': records both.
+      stacks: "all"
+
+      # devices, record_context etc.
+      kw_args: {}
+
+# configs for TransferQueue
+transfer_queue:
+
+  # Whether to enable transfer queue
+  enable: False
+
+# configs related to ray
+ray_kwargs:
+
+  # configs related to ray initialization
+  ray_init:
+
+    # Number of CPUs for Ray. Use a fixed number instead of null when using SLURM.
+    num_cpus: null
+
+  # Path to save Ray timeline JSON for performance profiling
+  timeline_json_file: null

@@ -1,0 +1,232 @@
+{
+  "schema_version": 1,
+  "python": "3.11",
+  "platform": "Linux x86_64 for supplied wheels",
+  "historical_parser_policy": "Preserve known historical AIME/MC edge cases without silent repair.",
+  "profiles": {
+    "paper4.gsm8k": {
+      "protocol_id": "paper4-gsm-regex-historical-v1",
+      "full_cell_n": 1319,
+      "source_files": {},
+      "wheels": {},
+      "data_files": {},
+      "identity_note": "Scorer semantics of the paper evaluation."
+    },
+    "qwen-dlm.gsm8k": {
+      "protocol_id": "qwen-dlm-gsm-regex-historical-v1",
+      "full_cell_n": 1319,
+      "source_files": {
+        "repo/repro/eval/benchmarks.py": "5240fa8858b6890b81dd94014515d2bff9366d32aed4b3cf8922c20ba8b9a72a"
+      },
+      "wheels": {},
+      "data_files": {},
+      "identity_note": "Scorer semantics of the paper evaluation."
+    },
+    "paper4.math500": {
+      "protocol_id": "paper4-math-verify-0.8.0-v1",
+      "full_cell_n": 500,
+      "source_files": {
+        "repo/training/diffusion-reasoning-dapo-latent/verl/verl/utils/reward_score/math_verify.py": "0bf89ab36401642a42bfacc53b8a954d87b168a11fca0dc9014c9d1e21ecded3"
+      },
+      "wheels": {
+        "he_wheels/latex2sympy2_extended-1.10.2-py3-none-any.whl": "f910442c5b02a466c1046f47d05cc5285181068b882399281f30102715337fb7",
+        "he_wheels/mpmath-1.3.0-py3-none-any.whl": "a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c",
+        "he_wheels/antlr4_python3_runtime-4.13.2-py3-none-any.whl": "fe3835eb8d33daece0e799090eda89719dbccee7aa39ef94eed3818cafa5a7e8",
+        "he_wheels/sympy-1.14.0-py3-none-any.whl": "e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5",
+        "he_wheels/math_verify-0.8.0-py3-none-any.whl": "31ca651296d817a9bb3fd58ca1fd0d192dcea709b1e5ecf2d0a4514c16f89087"
+      },
+      "data_files": {},
+      "identity_note": "Scorer semantics of the paper evaluation."
+    },
+    "qwen-dlm.math500": {
+      "protocol_id": "qwen-dlm-math-verify-0.8.0-v1",
+      "full_cell_n": 500,
+      "source_files": {
+        "repo/repro/eval/benchmarks.py": "5240fa8858b6890b81dd94014515d2bff9366d32aed4b3cf8922c20ba8b9a72a"
+      },
+      "wheels": {
+        "he_wheels/latex2sympy2_extended-1.10.2-py3-none-any.whl": "f910442c5b02a466c1046f47d05cc5285181068b882399281f30102715337fb7",
+        "he_wheels/mpmath-1.3.0-py3-none-any.whl": "a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c",
+        "he_wheels/antlr4_python3_runtime-4.13.2-py3-none-any.whl": "fe3835eb8d33daece0e799090eda89719dbccee7aa39ef94eed3818cafa5a7e8",
+        "he_wheels/sympy-1.14.0-py3-none-any.whl": "e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5",
+        "he_wheels/math_verify-0.8.0-py3-none-any.whl": "31ca651296d817a9bb3fd58ca1fd0d192dcea709b1e5ecf2d0a4514c16f89087"
+      },
+      "data_files": {},
+      "identity_note": "Scorer semantics of the paper evaluation."
+    },
+    "main.mbpp": {
+      "protocol_id": "mbpp427-codetaco-historical-v1",
+      "full_cell_n": 427,
+      "source_files": {
+        "repo/repro/eval/benchmarks.py": "5240fa8858b6890b81dd94014515d2bff9366d32aed4b3cf8922c20ba8b9a72a",
+        "repo/repro/experiments/paper_repro_20260917/score_mbpp427_our_extractor.py": "8e2d2aae72e626bcea731f6c86cf83c5258089019a48f597b32cc3b0baed0bab",
+        "repo/repro/reward/code_taco_reward.py": "b1681c441f27d187108261144d8c8a9e8637e3ff65c8eb2ea20f1b597d5bb581"
+      },
+      "wheels": {},
+      "data_files": {},
+      "identity_note": "Scorer semantics of the paper evaluation."
+    },
+    "qwen-dlm.he": {
+      "protocol_id": "qwen-dlm-humaneval-codetaco-f2230a5c-py311-v1",
+      "full_cell_n": 164,
+      "source_files": {
+        "repo/repro/eval/benchmarks.py": "5240fa8858b6890b81dd94014515d2bff9366d32aed4b3cf8922c20ba8b9a72a",
+        "repo/repro/reward/code_taco_reward.py": "b1681c441f27d187108261144d8c8a9e8637e3ff65c8eb2ea20f1b597d5bb581"
+      },
+      "wheels": {},
+      "data_files": {},
+      "identity_note": "Scorer semantics of the paper evaluation."
+    },
+    "paper4.he": {
+      "protocol_id": "paper4-humaneval-evalplus031-base-v1",
+      "full_cell_n": 164,
+      "source_files": {
+        "he_repo/repro/experiments/diffusion_gemma_aec_extra_eval_20260913/dgemma_core_score_point.py": "ea12b67283e02ff55c90b060d07f20308646ac668821547dd400a63a34bf015f"
+      },
+      "wheels": {
+        "he_wheels/aiohappyeyeballs-2.7.1-py3-none-any.whl": "9243213661e29250eb41368e5daa826fc017156c3b8a11440826b2e3ed376472",
+        "he_wheels/aiohttp-3.14.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl": "53e7b4ce82b54a8bcc71b3b67a5cbd177ca1d7f592cbc92cd38b7349f73482db",
+        "he_wheels/aiosignal-1.4.0-py3-none-any.whl": "053243f8b92b990551949e63930a839ff0cf0b0ebbe0597b0f3fb19e1a0fe82e",
+        "he_wheels/anyio-4.15.1-py3-none-any.whl": "6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101",
+        "he_wheels/appdirs-1.4.4-py2.py3-none-any.whl": "a841dacd6b99318a741b166adb07e19ee71a274450e68237b4650ca1055ab128",
+        "he_wheels/async_timeout-5.0.1-py3-none-any.whl": "39e3809566ff85354557ec2398b55e096c8364bacac9405a7a1fa429e77fe76c",
+        "he_wheels/attrs-26.1.0-py3-none-any.whl": "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309",
+        "he_wheels/certifi-2026.7.22-py3-none-any.whl": "62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775",
+        "he_wheels/charset_normalizer-3.5.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl": "c7b742bf31c88566b4bb6335a7f393bb322e580b6bb98df7bd0c25e6e3519ce8",
+        "he_wheels/click-8.5.0-py3-none-any.whl": "255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360",
+        "he_wheels/datasets-2.21.0-py3-none-any.whl": "25e4e097110ce28824b746a107727ada94024cba11db8bc588d468414692b65a",
+        "he_wheels/dill-0.3.8-py3-none-any.whl": "c36ca9ffb54365bdd2f8eb3eff7d2a21237f8452b57ace88b1ac615b7e815bd7",
+        "he_wheels/evalplus-0.3.1-py3-none-any.whl": "cd601debb67419113d10ac5c3317689d847f27de5d8cf3837975f3cab571b75d",
+        "he_wheels/exceptiongroup-1.3.1-py3-none-any.whl": "a7a39a3bd276781e98394987d3a5701d0c4edffb633bb7a5144577f82c773598",
+        "he_wheels/filelock-4.0.3-py3-none-any.whl": "30cd166e2aee2c7534ce2c33c6367c4cd051b8368e20e2c4eb0c34f699bacfab",
+        "he_wheels/frozenlist-1.8.0-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl": "2552f44204b744fba866e573be4c1f9048d6a324dfe14475103fd51613eb1d1f",
+        "he_wheels/fsspec-2024.6.1-py3-none-any.whl": "3cb443f8bcd2efb31295a5b9fdb02aee81d8452c80d28f97a6d0959e6cee101e",
+        "he_wheels/h11-0.16.0-py3-none-any.whl": "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86",
+        "he_wheels/hf_xet-1.6.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl": "d62671bb130879cef0ee4c9ebe47a14af6c66ec53e6d84dc15936e5ffdfac82f",
+        "he_wheels/httpcore2-2.13.1-py3-none-any.whl": "e1e05d4f25f7d7d496bfb96748f6f4b67657b03da069b3a68c36069f3db73d0a",
+        "he_wheels/httpx2-2.13.1-py3-none-any.whl": "6dff50fabc270ee5fd25d845d0b078ed20564579744d6d962850975996d2f9a4",
+        "he_wheels/huggingface_hub-0.24.6-py3-none-any.whl": "a990f3232aa985fe749bc9474060cbad75e8b2f115f6665a9fda5b9c97818970",
+        "he_wheels/idna-3.20-py3-none-any.whl": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+        "he_wheels/markdown_it_py-4.2.0-py3-none-any.whl": "9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a",
+        "he_wheels/mdurl-0.1.2-py3-none-any.whl": "84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8",
+        "he_wheels/multidict-6.9.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl": "e8f1e362c9352b50ed120f001046fdbb80810c9d56580f4c3fc13bbe30823387",
+        "he_wheels/multipledispatch-1.0.0-py3-none-any.whl": "0c53cd8b077546da4e48869f49b13164bebafd0c2a5afceb6bb6a316e7fb46e4",
+        "he_wheels/multiprocess-0.70.16-py311-none-any.whl": "af4cabb0dac72abfb1e794fa7855c325fd2b55a10a44628a3c1ad3311c04127a",
+        "he_wheels/numpy-1.26.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl": "666dbfb6ec68962c033a450943ded891bed2d54e6755e35e5835d63f4f6931d5",
+        "he_wheels/packaging-26.3-py3-none-any.whl": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+        "he_wheels/pandas-2.3.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl": "1d81573b3f7db40d020983f78721e9bfc425f411e616ef019a10ebf597aedb2e",
+        "he_wheels/propcache-0.5.4-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl": "6e9368e87a3efc285e559131092c5db643eb8e56de4ee42064d5baec22ef2bb5",
+        "he_wheels/psutil-6.0.0-cp36-abi3-manylinux_2_12_x86_64.manylinux2010_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl": "5fd9a97c8e94059b0ef54a7d4baf13b405011176c3b6ff257c247cae0d560ecd",
+        "he_wheels/pyarrow-20.0.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl": "b8ff87cc837601532cc8242d2f7e09b4e02404de1b797aee747dd4ba4bd6313f",
+        "he_wheels/pygments-2.21.0-py3-none-any.whl": "2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9",
+        "he_wheels/python_dateutil-2.9.0.post0-py2.py3-none-any.whl": "a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427",
+        "he_wheels/pytz-2026.4-py2.py3-none-any.whl": "9d514388fbc89ca0833203464272ac485b8828568ab73532f5020f17e892a0ff",
+        "he_wheels/pyyaml-6.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl": "b8bb0864c5a28024fac8a632c443c87c5aa6f215c0b126c449ae1a150412f31d",
+        "he_wheels/requests-2.34.2-py3-none-any.whl": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0",
+        "he_wheels/rich-13.9.4-py3-none-any.whl": "6049d5e6ec054bf2779ab3358186963bac2ea89175919d699e378b99738c2a90",
+        "he_wheels/six-1.17.0-py2.py3-none-any.whl": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
+        "he_wheels/tempdir-0.7.1-py3-none-any.whl": "77ef154a646451ae98c0ba1422c273aba8d4709089b9ece1b41c3ec7476754f8",
+        "he_wheels/termcolor-2.4.0-py3-none-any.whl": "9297c0df9c99445c2412e832e882a7884038a25617c60cea2ad69488d4040d63",
+        "he_wheels/tomli-2.4.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl": "5a881ab208c0baf688221f8cecc5401bd291d67e38a1ac884d6736cbcd8247e9",
+        "he_wheels/tqdm-4.66.5-py3-none-any.whl": "90279a3770753eafc9194a0364852159802111925aa30eb3f9d85b0e805ac7cd",
+        "he_wheels/tree_sitter-0.22.3-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl": "de16468ea22c910e67caa91c99be9d6eb73e97e5164480a890f678b22d32faca",
+        "he_wheels/tree_sitter_python-0.21.0-cp38-abi3-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl": "cda4e742627724eabed95e06ca67b640f8b31e86e776905afc396c928082f032",
+        "he_wheels/truststore-0.10.4-py3-none-any.whl": "adaeaecf1cbb5f4de3b1959b42d41f6fab57b2b1666adb59e89cb0b53361d981",
+        "he_wheels/typing_extensions-4.16.0-py3-none-any.whl": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+        "he_wheels/tzdata-2026.4-py2.py3-none-any.whl": "c2169a8b0a7a5e9674da5a135ccdfb2b3e671b333ed9fed17b41f73c34476e81",
+        "he_wheels/urllib3-2.8.0-py3-none-any.whl": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3",
+        "he_wheels/wget-3.2-py3-none-any.whl": "221705ba19e0d203fda4df87d226cb04d77edb03d1e6dfc648c9d8fa2cd90713",
+        "he_wheels/xxhash-4.0.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl": "101aa300de6ceef3d9c77569706330d8921fc45dd82bceed2084f1e9f2557a24",
+        "he_wheels/yarl-1.25.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl": "d5add7b4ca7afeea91d52e4d4e4db3b1fe9885b71f07054560d8c4296b7441a2",
+        "he_wheels/latex2sympy2_extended-1.10.2-py3-none-any.whl": "f910442c5b02a466c1046f47d05cc5285181068b882399281f30102715337fb7",
+        "he_wheels/mpmath-1.3.0-py3-none-any.whl": "a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c",
+        "he_wheels/antlr4_python3_runtime-4.13.2-py3-none-any.whl": "fe3835eb8d33daece0e799090eda89719dbccee7aa39ef94eed3818cafa5a7e8",
+        "he_wheels/sympy-1.14.0-py3-none-any.whl": "e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5",
+        "he_wheels/math_verify-0.8.0-py3-none-any.whl": "31ca651296d817a9bb3fd58ca1fd0d192dcea709b1e5ecf2d0a4514c16f89087"
+      },
+      "data_files": {
+        "he_data/HumanEvalPlus-v0.1.10.jsonl": "42526ec0e7d5f3ee0b06d6ced98f8c8bae3d76519151bfb3d36f79010645bd7f"
+      },
+      "identity_note": "Scorer semantics of the paper evaluation."
+    },
+    "transfer.aime": {
+      "protocol_id": "transfer-aime-historical-regex-v1",
+      "full_cell_n": 60,
+      "source_files": {
+        "transfer_repo/score_full_extra_results.py": "501dbdb10cd7e16e366aeb376f8ceefd87ce5ed2ad0260e8bbdf5a007331c1ce"
+      },
+      "wheels": {},
+      "data_files": {},
+      "identity_note": "Scorer semantics of the paper evaluation."
+    },
+    "transfer.gpqa": {
+      "protocol_id": "transfer-gpqa-historical-regex-v1",
+      "full_cell_n": 198,
+      "source_files": {
+        "transfer_repo/score_full_extra_results.py": "501dbdb10cd7e16e366aeb376f8ceefd87ce5ed2ad0260e8bbdf5a007331c1ce"
+      },
+      "wheels": {},
+      "data_files": {},
+      "identity_note": "Scorer semantics of the paper evaluation."
+    },
+    "transfer.mmlu_pro": {
+      "protocol_id": "transfer-mmlu_pro-historical-regex-v1",
+      "full_cell_n": 12032,
+      "source_files": {
+        "transfer_repo/score_full_extra_results.py": "501dbdb10cd7e16e366aeb376f8ceefd87ce5ed2ad0260e8bbdf5a007331c1ce"
+      },
+      "wheels": {},
+      "data_files": {},
+      "identity_note": "Scorer semantics of the paper evaluation."
+    },
+    "transfer.lcb": {
+      "protocol_id": "transfer-lcb-v6-candidate-v1",
+      "full_cell_n": 175,
+      "cpus": 8,
+      "source_files": {
+        "transfer_repo/score_full_extra_results.py": "501dbdb10cd7e16e366aeb376f8ceefd87ce5ed2ad0260e8bbdf5a007331c1ce",
+        "transfer_repo/lcb_score.py": "cba8dad05e3c584207ab5c5bf241184ba098802cd3eec321b28771c068db15f7",
+        "transfer_repo/lcb_lib/testing_util.py": "6b1d4daabce6b9e5b0ecc685f1de930294a2846c06dfad73e997e6cafc4ab631",
+        "transfer_repo/lcb_lib/extract_utils.py": "19f10fd1f4b432ab2afa236bd29f98c0eebed3bbe039a21b293ae8586dfea1bf"
+      },
+      "wheels": {
+        "transfer_wheels/numpy-1.26.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl": "666dbfb6ec68962c033a450943ded891bed2d54e6755e35e5835d63f4f6931d5"
+      },
+      "data_files": {
+        "transfer_data/lcb_v6_tests.json": "d3b2da8f72842657dbc6809b76acfbcaaf7505b7cc4ea6c5a4f51afd40e0ac04"
+      },
+      "identity_note": "Source and dependency closure executed in the scoring sandbox."
+    },
+    "transfer.ifeval": {
+      "protocol_id": "transfer-ifeval-strict-candidate-rng0-v1",
+      "full_cell_n": 541,
+      "source_files": {
+        "transfer_repo/score_full_extra_results.py": "501dbdb10cd7e16e366aeb376f8ceefd87ce5ed2ad0260e8bbdf5a007331c1ce",
+        "transfer_repo/instruction_following_eval/evaluation_lib.py": "01deab4c67bf7f30c3a48f59d7b0bb31ea165651a636af7f2a3af389a420edbb",
+        "transfer_repo/instruction_following_eval/instructions.py": "130f9c50e15ae44820c9ef5b4aa2aa948c4c0a17f4c44c2932b9271add22c6d7",
+        "transfer_repo/instruction_following_eval/instructions_registry.py": "ec92d72c264f6d906978613085db262356174300370a3fffe6fefd5969ce9cfc",
+        "transfer_repo/instruction_following_eval/instructions_util.py": "a73797261eee5bf447e279d82a2b700b1bdd3cb1193412dbab1270a85832bc6b",
+        "transfer_repo/instruction_following_eval/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "wheels": {
+        "transfer_wheels/absl_py-2.1.0-py3-none-any.whl": "526a04eadab8b4ee719ce68f204172ead1027549089702d99b9059f129ff1308",
+        "transfer_wheels/click-8.1.7-py3-none-any.whl": "ae74fb96c20a0277a1d615f1e4d73c8414f5a98db8b799a7931d1582f3390c28",
+        "transfer_wheels/immutabledict-4.2.0-py3-none-any.whl": "d728b2c2410d698d95e6200237feb50a695584d20289ad3379a439aa3d90baba",
+        "transfer_wheels/joblib-1.4.2-py3-none-any.whl": "06d478d5674cbc267e7496a410ee875abd68e4340feff4490bcb7afb88060ae6",
+        "transfer_wheels/langdetect-1.0.9-py3-none-any.whl": "955016b95951bb42dc72808fe0f7dc0c1ad29f8f1eee2b60532515128fbb3f98",
+        "transfer_wheels/nltk-3.9.1-py3-none-any.whl": "4fa26829c5b00715afe3061398a8989dc643b92ce7dd93fb4585a70930d168a1",
+        "transfer_wheels/regex-2024.9.11-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl": "6113c008a7780792efc80f9dfe10ba0cd043cbf8dc9a76ef757850f51b4edc50",
+        "transfer_wheels/six-1.16.0-py2.py3-none-any.whl": "8abb2f1d86890a2dfb989f9a77cfcfd3e47c2a354b01111771326f8aa26e0254",
+        "transfer_wheels/tqdm-4.66.5-py3-none-any.whl": "90279a3770753eafc9194a0364852159802111925aa30eb3f9d85b0e805ac7cd",
+        "transfer_wheels/numpy-1.26.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl": "666dbfb6ec68962c033a450943ded891bed2d54e6755e35e5835d63f4f6931d5"
+      },
+      "data_files": {
+        "transfer_data/nltk_data/tokenizers/punkt_tab/english/collocations.tab": "8e2da1225e4dd2cc9dba261ee231ccb134859e21b46006e7f472c5ee269af0cf",
+        "transfer_data/nltk_data/tokenizers/punkt_tab/english/sent_starters.txt": "f3f8535483e1dba487241b764945168123bca3209a9645e59acd1225dc76edac",
+        "transfer_data/nltk_data/tokenizers/punkt_tab/english/abbrev_types.txt": "92a3e070f43d9b4c5534758ca40ad7343b04e7e29bfe0c2eb658a39445a4f779",
+        "transfer_data/nltk_data/tokenizers/punkt_tab/english/ortho_context.tab": "4bbcca25ed3d3f06c02402abf8419b9f033b8adc06e7b482eca4e45f81a5dc4c"
+      },
+      "identity_note": "Source and dependency closure; random.seed(0) and langdetect DetectorFactory.seed=0."
+    }
+  }
+}

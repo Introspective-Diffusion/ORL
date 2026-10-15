@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "status": "Six measured models, each on Hugging Face at a pinned revision",
+  "models": {
+    "qwen-dlm-base": {"family": "qwen-dlm", "role": "base", "label": "QwenDLM SFT step 38750", "weights_env": "QWEN_DLM_BASE_WEIGHTS", "distribution": "public_hf_or_local", "public_hf": {"repo_id": "yifanyu/QwenDLM-4B", "revision": "94c4a956af73bb7be5ae5474e85a490a96ccb2b2"}, "decoding": "configs/paper/decoding/qwen-dlm.yaml"},
+    "qwen-dlm-orl": {"family": "qwen-dlm", "role": "orl", "label": "QwenDLM ORL step 350", "weights_env": "QWEN_DLM_ORL_WEIGHTS", "distribution": "public_hf_or_local", "public_hf": {"repo_id": "yifanyu/QwenDLM-4B-ORL", "revision": "e12b90bf8267aa5d994bcf73996f00e00d484239"}, "decoding": "configs/paper/decoding/qwen-dlm.yaml"},
+    "llada-base": {"family": "llada", "role": "base", "label": "LLaDA-2.1-mini Quality", "weights_env": "LLADA_BASE_WEIGHTS", "distribution": "public_hf_or_local", "public_hf": {"repo_id": "inclusionAI/LLaDA2.1-mini", "revision": "20e64e2ad21644d0e5248586ed9c942cdd45de0f"}, "decoding": "configs/paper/decoding/llada.yaml"},
+    "llada-orl": {"family": "llada", "role": "orl", "label": "LLaDA Quality ORL step 625", "weights_env": "LLADA_ORL_WEIGHTS", "distribution": "public_hf_or_local", "public_hf": {"repo_id": "yifanyu/LLaDA2.1-mini-ORL", "revision": "eb9e57b7ced51a750ec4d94aa7d4cee46243f597"}, "decoding": "configs/paper/decoding/llada.yaml"},
+    "dg-base": {"family": "dg", "role": "base", "label": "DiffusionGemma-26B-A4B-it", "weights_env": "DG_BASE_WEIGHTS", "distribution": "public_hf_or_local", "public_hf": {"repo_id": "google/diffusiongemma-26B-A4B-it", "revision": "f7f5b7f5fa82ffc52addd066915886d497f5517b"}, "decoding": "configs/paper/decoding/dg.yaml"},
+    "dg-orl": {"family": "dg", "role": "orl", "label": "DiffusionGemma ORL step 900", "weights_env": "DG_ORL_WEIGHTS", "distribution": "public_hf_or_local", "public_hf": {"repo_id": "yifanyu/DiffusionGemma-26B-A4B-it-ORL", "revision": "a5f9c6d23c585eefacf3986a12c3e809061f01ce"}, "decoding": "configs/paper/decoding/dg.yaml"}
+  },
+  "notes": ["No weight download is performed by the planner.", "Every weight, configuration and tokenizer file of these revisions is byte-identical to the model directory evaluated for the paper.", "dg-base is evaluated at the revision above; DiffusionGemma training starts from revision 52de6b914ee1749a7d4933202505ddf5b414ec43, which differs from it only in chat_template.jinja."]
+}

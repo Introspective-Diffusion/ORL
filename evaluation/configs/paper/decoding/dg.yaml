@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "family": "dg",
+  "status": "Validated main/transfer protocol; supplied runtime and frozen inputs required",
+  "engine": {"runtime_env": "DG_RUNTIME_ROOT", "source_revision": "f2230a5c2fcca72440d6c3fea4b50441b7d7516c", "image": "vllm/vllm-openai@sha256:9c719fc0c869092c7d0533f8357d6985a38d5ff03b20ffb6a4620c2b4806dd4b", "tensor_parallel_size": 1, "max_num_seqs": 1, "effective_dtype": "bfloat16", "dtype_policy": "No explicit CLI override; pinned model/runtime default", "enable_prefix_caching": false, "attention_backend": "TRITON_ATTN", "gpu_memory_utilization": 0.95, "context_length": 8192, "benchmark_context_length": {"aime": 32768, "gpqa": 32768}, "context_note": "32768 for AIME/GPQA; 8192 for every other benchmark"},
+  "sampling": {"temperature": 0.0, "per_request_seed_reset": true},
+  "decoder_common": {"canvas_length": 256, "max_denoising_steps": 48, "confidence_threshold": 0.005, "stability_threshold": 1},
+  "roles": {
+    "base": {"decoder": {"sampler_patch": "alignment", "t_min": 0.4, "t_max": 0.8, "sampler_config": {"entropy_bound": 0.1}}, "benchmark_decoder": {}, "max_new_tokens": {"gsm8k": 4096, "math500": 4096, "humaneval": 2048, "mbpp": 4096, "aime": 16384, "gpqa": 16384, "mmlu_pro": 4096, "lcb": 4096, "ifeval": 2048}},
+    "orl": {"decoder": {"sampler_patch": "adaptive_scalar", "t_min": 0.5, "t_max": 0.8, "sampler_config": {"entropy_bound": 0.12}, "temperature_mode": "adaptive_scalar", "adaptive_power": 0.5}, "benchmark_decoder": {}, "max_new_tokens": {"gsm8k": 4096, "math500": 4096, "humaneval": 2048, "mbpp": 4096, "aime": 16384, "gpqa": 16384, "mmlu_pro": 4096, "lcb": 4096, "ifeval": 2048}}
+  },
+  "source_references": ["inference/vllm/patches/vllm_dg_hf_align_patch.py", "inference/vllm/patches/vllm_dg_adaptive_scalar_patch.py", "inference/clients/vllm_full_extra_client.py"],
+  "historical_source_references_not_bundled": ["repro/experiments/paper_repro_20260917/vllm_dg_hf_align_patch.py", "repro/experiments/paper_repro_20260917/vllm_dg_adaptive_scalar_patch.py", "repro/experiments/paper_repro_20260917/vllm_full_extra_client.py"],
+  "notes": ["Canonical MBPP427 uses the full-extra client cap4096, not the unused legacy MBPP378 branch cap2048."]
+}

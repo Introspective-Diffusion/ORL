@@ -1,0 +1,36 @@
+# Packages installed into the training virtual environment on top of the base image
+# (python3 -m venv --system-site-packages; then pip install -r requirements-venv.txt).
+# Base image: lmsysorg/sglang:nightly-dev-cu12-20260611-99ab90c5 (Ubuntu 24.04, CUDA 12.9, Python 3.12.3).
+absl-py==2.4.0
+accelerate==1.14.0
+aiohttp-cors==0.8.1
+cachetools==7.1.4
+codetiming==1.4.0
+colorful==0.5.8
+# fast-diffusion-attention: provided by training/ (put on PYTHONPATH by scripts/orl_train.py)
+gitdb==4.0.12
+GitPython==3.1.50
+hydra-core==1.3.3
+latex2sympy2_extended==1.11.0
+Markdown==3.10.2
+math-verify==0.9.0
+msgpack==1.2.1
+opencensus==0.11.4
+opencensus-context==0.1.3
+opentelemetry-exporter-prometheus==0.63b1
+packaging==25.0
+peft==0.19.1
+pylatexenc==2.10
+pyvers==0.1.0
+ray==2.55.1
+sentry-sdk==2.64.0
+smart_open==8.0.0
+smmap==5.0.3
+tensorboard==2.20.0
+tensorboard-data-server==0.7.2
+tensordict==0.10.0
+torchdata==0.11.0
+# verl: provided by training/ (put on PYTHONPATH by scripts/orl_train.py)
+wandb==0.28.0
+Werkzeug==3.1.8
+wrapt==2.2.2

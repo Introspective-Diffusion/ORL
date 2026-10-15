@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "purpose": "Recorded speculative-decoding comparison settings; not a launcher",
+  "benchmarks": {"gsm8k": 1319, "humaneval": 164},
+  "runtime": {"engine": "vLLM", "gpu": "H100", "gpus": 1, "batch_size": 1, "temperature": 0, "warmup_requests": 2},
+  "aggregation": "Equal-weight mean of benchmark accuracy and clean pooled completion TPS; each setting uses its own clean request set",
+  "length_failures": "Incorrect for quality; excluded from clean TPS",
+  "quality_floor": {"reference": "ORL mean accuracy", "tolerance_percentage_points": 0.5, "selection": "Fastest measured setting per drafter meeting the one-sided floor"},
+  "verification": {"relaxed_rule": "Accept draft token v when p(v) >= tau * max_u p(u)", "exact_greedy_tau": 1},
+  "targets": {
+    "qwen": {
+      "model": "Qwen3-4B-Thinking-2507",
+      "max_new_tokens": 32768,
+      "prompting": "Model-native",
+      "eagle3": {"drafter": "taobao-mnn/Qwen3-4B-Thinking-2507-Eagle", "proposal_length": 4, "tau_grid": [1, 0.1, 0.03, 0.01, 0.003, 0.001]},
+      "dflash": {"drafter": "bingyang-lei/Qwen3-4B-Thinking-Draft-OPD", "proposal_length": 15, "tau_grid": [1, 0.1, 0.03, 0.01, 0.003], "drafter_target_release_matches": false}
+    },
+    "gemma": {
+      "model": "Gemma-4-26B-A4B-it",
+      "max_new_tokens": 8192,
+      "prompting": "Model-native, thinking disabled",
+      "eagle3": {"drafter": "RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3", "proposal_length": 3, "tau_grid": [1, 0.03, 0.003, 0.0001, 0.00001]},
+      "dflash": {"drafter": "z-lab/gemma-4-26B-A4B-it-DFlash", "proposal_length": 8, "tau_grid": [1, 0.03, 0.003, 0.0001, 0.00001]}
+    }
+  }
+}

@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "registry": "repro/eval/portable/scoring_registry.json",
+  "target": "Linux x86_64 CPython3.11",
+  "bundled_weights": false,
+  "bundled_datasets": false,
+  "bundled_wheels": false,
+  "source_closure": "Profile-specific required source/data/wheel inventories are authoritative in the registry.",
+  "licensed_user_inputs": [
+    "HumanEvalPlus-v0.1.10.jsonl",
+    "LCB-v6 frozen tests including private test cases",
+    "IFEval candidate implementation and NLTK punkt_tab English resources",
+    "Exact profile-specific offline wheelhouse"
+  ],
+  "historical_binding": "All numeric parser edge cases of the paper scorers are preserved.",
+  "profiles": {
+    "paper4.gsm8k": {
+      "protocol_id": "paper4-gsm-regex-historical-v1",
+      "source_files": {},
+      "data_files": {}
+    },
+    "qwen-dlm.gsm8k": {
+      "protocol_id": "qwen-dlm-gsm-regex-historical-v1",
+      "source_files": {
+        "repo/repro/eval/benchmarks.py": "5240fa8858b6890b81dd94014515d2bff9366d32aed4b3cf8922c20ba8b9a72a"
+      },
+      "data_files": {}
+    },
+    "paper4.math500": {
+      "protocol_id": "paper4-math-verify-0.8.0-v1",
+      "source_files": {
+        "repo/training/diffusion-reasoning-dapo-latent/verl/verl/utils/reward_score/math_verify.py": "0bf89ab36401642a42bfacc53b8a954d87b168a11fca0dc9014c9d1e21ecded3"
+      },
+      "data_files": {}
+    },
+    "qwen-dlm.math500": {
+      "protocol_id": "qwen-dlm-math-verify-0.8.0-v1",
+      "source_files": {
+        "repo/repro/eval/benchmarks.py": "5240fa8858b6890b81dd94014515d2bff9366d32aed4b3cf8922c20ba8b9a72a"
+      },
+      "data_files": {}
+    },
+    "main.mbpp": {
+      "protocol_id": "mbpp427-codetaco-historical-v1",
+      "source_files": {
+        "repo/repro/eval/benchmarks.py": "5240fa8858b6890b81dd94014515d2bff9366d32aed4b3cf8922c20ba8b9a72a",
+        "repo/repro/experiments/paper_repro_20260917/score_mbpp427_our_extractor.py": "8e2d2aae72e626bcea731f6c86cf83c5258089019a48f597b32cc3b0baed0bab",
+        "repo/repro/reward/code_taco_reward.py": "b1681c441f27d187108261144d8c8a9e8637e3ff65c8eb2ea20f1b597d5bb581"
+      },
+      "data_files": {}
+    },
+    "qwen-dlm.he": {
+      "protocol_id": "qwen-dlm-humaneval-codetaco-f2230a5c-py311-v1",
+      "source_files": {
+        "repo/repro/eval/benchmarks.py": "5240fa8858b6890b81dd94014515d2bff9366d32aed4b3cf8922c20ba8b9a72a",
+        "repo/repro/reward/code_taco_reward.py": "b1681c441f27d187108261144d8c8a9e8637e3ff65c8eb2ea20f1b597d5bb581"
+      },
+      "data_files": {}
+    },
+    "paper4.he": {
+      "protocol_id": "paper4-humaneval-evalplus031-base-v1",
+      "source_files": {
+        "he_repo/repro/experiments/diffusion_gemma_aec_extra_eval_20260913/dgemma_core_score_point.py": "ea12b67283e02ff55c90b060d07f20308646ac668821547dd400a63a34bf015f"
+      },
+      "data_files": {
+        "he_data/HumanEvalPlus-v0.1.10.jsonl": "42526ec0e7d5f3ee0b06d6ced98f8c8bae3d76519151bfb3d36f79010645bd7f"
+      }
+    },
+    "transfer.aime": {
+      "protocol_id": "transfer-aime-historical-regex-v1",
+      "source_files": {
+        "transfer_repo/score_full_extra_results.py": "501dbdb10cd7e16e366aeb376f8ceefd87ce5ed2ad0260e8bbdf5a007331c1ce"
+      },
+      "data_files": {}
+    },
+    "transfer.gpqa": {
+      "protocol_id": "transfer-gpqa-historical-regex-v1",
+      "source_files": {
+        "transfer_repo/score_full_extra_results.py": "501dbdb10cd7e16e366aeb376f8ceefd87ce5ed2ad0260e8bbdf5a007331c1ce"
+      },
+      "data_files": {}
+    },
+    "transfer.mmlu_pro": {
+      "protocol_id": "transfer-mmlu_pro-historical-regex-v1",
+      "source_files": {
+        "transfer_repo/score_full_extra_results.py": "501dbdb10cd7e16e366aeb376f8ceefd87ce5ed2ad0260e8bbdf5a007331c1ce"
+      },
+      "data_files": {}
+    },
+    "transfer.lcb": {
+      "protocol_id": "transfer-lcb-v6-candidate-v1",
+      "source_files": {
+        "transfer_repo/score_full_extra_results.py": "501dbdb10cd7e16e366aeb376f8ceefd87ce5ed2ad0260e8bbdf5a007331c1ce",
+        "transfer_repo/lcb_score.py": "cba8dad05e3c584207ab5c5bf241184ba098802cd3eec321b28771c068db15f7",
+        "transfer_repo/lcb_lib/testing_util.py": "6b1d4daabce6b9e5b0ecc685f1de930294a2846c06dfad73e997e6cafc4ab631",
+        "transfer_repo/lcb_lib/extract_utils.py": "19f10fd1f4b432ab2afa236bd29f98c0eebed3bbe039a21b293ae8586dfea1bf"
+      },
+      "data_files": {
+        "transfer_data/lcb_v6_tests.json": "d3b2da8f72842657dbc6809b76acfbcaaf7505b7cc4ea6c5a4f51afd40e0ac04"
+      }
+    },
+    "transfer.ifeval": {
+      "protocol_id": "transfer-ifeval-strict-candidate-rng0-v1",
+      "source_files": {
+        "transfer_repo/score_full_extra_results.py": "501dbdb10cd7e16e366aeb376f8ceefd87ce5ed2ad0260e8bbdf5a007331c1ce",
+        "transfer_repo/instruction_following_eval/evaluation_lib.py": "01deab4c67bf7f30c3a48f59d7b0bb31ea165651a636af7f2a3af389a420edbb",
+        "transfer_repo/instruction_following_eval/instructions.py": "130f9c50e15ae44820c9ef5b4aa2aa948c4c0a17f4c44c2932b9271add22c6d7",
+        "transfer_repo/instruction_following_eval/instructions_registry.py": "ec92d72c264f6d906978613085db262356174300370a3fffe6fefd5969ce9cfc",
+        "transfer_repo/instruction_following_eval/instructions_util.py": "a73797261eee5bf447e279d82a2b700b1bdd3cb1193412dbab1270a85832bc6b",
+        "transfer_repo/instruction_following_eval/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "data_files": {
+        "transfer_data/nltk_data/tokenizers/punkt_tab/english/collocations.tab": "8e2da1225e4dd2cc9dba261ee231ccb134859e21b46006e7f472c5ee269af0cf",
+        "transfer_data/nltk_data/tokenizers/punkt_tab/english/sent_starters.txt": "f3f8535483e1dba487241b764945168123bca3209a9645e59acd1225dc76edac",
+        "transfer_data/nltk_data/tokenizers/punkt_tab/english/abbrev_types.txt": "92a3e070f43d9b4c5534758ca40ad7343b04e7e29bfe0c2eb658a39445a4f779",
+        "transfer_data/nltk_data/tokenizers/punkt_tab/english/ortho_context.tab": "4bbcca25ed3d3f06c02402abf8419b9f033b8adc06e7b482eca4e45f81a5dc4c"
+      }
+    }
+  }
+}

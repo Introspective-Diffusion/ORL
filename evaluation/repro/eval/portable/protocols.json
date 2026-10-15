@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "status": "Evaluation protocols of the paper",
+  "historical_parser_policy": "preserve the parser behavior of the paper evaluation",
+  "main_paper4": {
+    "checkpoints": ["llada-base", "llada-orl", "dg-base", "dg-orl"],
+    "model_binding": "user-provided complete weight-file checksum manifest required",
+    "dg_base_binding": "immutable revision f7f5b7f5fa82ffc52addd066915886d497f5517b",
+    "llada_base_revision": "20e64e2ad21644d0e5248586ed9c942cdd45de0f",
+    "engine_revision": "f2230a5c2fcca72440d6c3fea4b50441b7d7516c",
+    "llada_image_digest": "sha256:065d403274324cc9dec4f830ca62540e6ac586746e1aed268c98a2b347d5853f",
+    "dg_image_digest": "sha256:9c719fc0c869092c7d0533f8357d6985a38d5ff03b20ffb6a4620c2b4806dd4b",
+    "counts": {"gsm8k": 1319, "he": 164, "math500": 500, "mbpp": 427},
+    "llada_seeds": [12345],
+    "dg_seeds": [1234, 1235, 1236],
+    "llada_max_new": {"gsm8k": 4096, "he": 4096, "math500": 4096, "mbpp": 4096},
+    "dg_max_new": {"gsm8k": 4096, "he": 2048, "math500": 4096, "mbpp": 4096},
+    "mbpp_input_sha256": "b5443f461deca1546253c5fda84dc01e6fb9486b6510832a39c135474520939a",
+    "prompt_policy": "use family-specific frozen prompts, task IDs, gold, and input hashes; no cross-family normalization",
+    "he_scorer": {
+      "source": "repro/experiments/diffusion_gemma_aec_extra_eval_20260913/dgemma_core_score_point.py",
+      "sha256": "ea12b67283e02ff55c90b060d07f20308646ac668821547dd400a63a34bf015f",
+      "function": "score_code(rows, 'humaneval', work)",
+      "coverage": "164 required",
+      "evalplus": "0.3.1",
+      "data_version": "HumanEvalPlus v0.1.10",
+      "data_md5": "fe585eb4df8c88d844eeb463ea4d0302",
+      "tests": "base, not plus",
+      "warning": "QwenDLM uses a different historical evaluator; do not substitute this protocol"
+    },
+    "mbpp_scorer": {
+      "source": "repro/experiments/paper_repro_20260917/score_mbpp427_our_extractor.py",
+      "sha256": "8e2d2aae72e626bcea731f6c86cf83c5258089019a48f597b32cc3b0baed0bab",
+      "arguments": ["--root", "{inputs}", "--repo", "{runtime}", "--entity", "ENTITY", "--workers", "4", "--out", "{output}/mbpp.json"]
+    },
+    "math_dependencies": {
+      "math-verify": "0.8.0", "sympy": "1.14.0",
+      "latex2sympy2-extended": "1.10.2", "antlr4-python3-runtime": "4.13.2", "mpmath": "1.3.0"
+    }
+  },
+  "main_qwen_dlm": {
+    "checkpoints": ["qwen-dlm-base", "qwen-dlm-orl"],
+    "scope": "one shard per recipe; full cell requires all eight disjoint fresh-server partitions",
+    "harness_revision": "f2230a5c2fcca72440d6c3fea4b50441b7d7516c",
+    "engine_revision": "b974f47818b5c8e6ab855da8f19e1cad0c92464f",
+    "image_digest": "sha256:065d403274324cc9dec4f830ca62540e6ac586746e1aed268c98a2b347d5853f",
+    "source_sha256": {
+      "eval_client.py": "811dd2abac9f64a8d036baae008ed8c7d55cbe8402d4886765bb7a7c2429870f",
+      "run_eval.py": "b04b4ebf54ce9d003b8d42125342217b07cc063b1c0ce819c4cf3fc9b597ae92",
+      "benchmarks.py": "5240fa8858b6890b81dd94014515d2bff9366d32aed4b3cf8922c20ba8b9a72a"
+    },
+    "counts": {"gsm8k": 1319, "he": 164, "math500": 500, "mbpp": 427},
+    "input_sha256": {
+      "gsm8k": "40805b714b72e65dde956b352960af7f608138a58db13abb519c3d245386784c",
+      "math500": "2d084c9d3ec66b364633531bd1519f38f7f331115c0198ccc87151d83f8cae32",
+      "he": "0f0ea89ab42f2debe39317b97bb5441431985da8a2854858539455f0f7012db0",
+      "mbpp": "b5443f461deca1546253c5fda84dc01e6fb9486b6510832a39c135474520939a"
+    },
+    "input_serialization": "full frozen prompt/gold/meta rows, sorted-key ASCII JSON plus newline; no paper4 prompt or DG message conversion",
+    "partition": "8 contiguous balanced partitions; the first N%8 partitions receive one extra task",
+    "server_seed": 1234,
+    "decoder_randtok_seed": 12345,
+    "base_max_new": {"gsm8k": 49152, "he": 32768, "math500": 49152, "mbpp": 49152},
+    "orl_max_new": {"gsm8k": 32768, "he": 32768, "math500": 32768, "mbpp": 49152},
+    "context_length": 65536,
+    "max_running_requests": 1,
+    "scoring": "separate isolated historical QwenDLM scorer; paper4 HumanEval is not interchangeable"
+  },
+  "transfer": {
+    "counts": {"aime24": 30, "aime25": 30, "gpqa": 198, "mmlu_pro": 12032, "lcb": 175, "ifeval": 541},
+    "caps": {"aime": 16384, "gpqa": 16384, "mmlu_pro": 4096, "lcb": 4096, "ifeval": 2048},
+    "aime_repetitions_per_model": 8,
+    "gpqa_repetitions_per_model": 3,
+    "other_repetitions": {"llada": 1, "dg": 3},
+    "first_seed": {"llada": 12345, "dg": 1234},
+    "dg_long_task_context": 32768,
+    "asset_distribution": "MMLU-Pro and IFEval bundled; AIME, LiveCodeBench with its tests, and GPQA rebuilt by repro/eval/build_transfer_inputs.py, GPQA from the gated Hugging Face dataset"
+  },
+  "efficiency": {
+    "denoising_tpf": "arithmetic mean of response completion_tokens / fwd_denoise over finish!=length",
+    "all_forward_tpf": "arithmetic mean of response completion_tokens / fwd_total over finish!=length",
+    "serial_tps": "sum completion_tokens / sum wall_s over finish!=length",
+    "accuracy": "all expected tasks in denominator; finish=length is incorrect",
+    "warning": "not canvas TPF, not parallel wall-clock throughput; aggregate seeds only by an explicit paper-specific rule"
+  }
+}

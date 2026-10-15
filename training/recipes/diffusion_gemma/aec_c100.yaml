@@ -1,0 +1,320 @@
+# Generated from the captured launch of the paper run; see training/recipes/README.md.
+name: diffusion_gemma_aec_c100
+description: 'DiffusionGemma-26B-A4B ORL (paper checkpoint = step 900), steps 1-900 in one launch. Native self-conditioning retained, 256-token canvas with every intermediate state replayed (detached prefix KV), token-mean CE + canvas-level AEC (rho 0.2, coef 100, scope all_valid, no gate), verified responses only, 1 prompt x 8 rollouts, constant AdamW lr 1e-5. Two nodes: an 8-GPU FSDP actor node (Ray head) and an 8-GPU SGLang rollout node (Ray worker); training/scripts/reproduce_diffusion_gemma.sh starts the Ray cluster and the run.'
+nodes: 2
+gpus_per_node: 8
+base_config: QwenDLM-4B-postnorm002-DAPO-sglang-noedit-cwppo-smoke
+sglang_dir: sglang_dgemma
+extra_python_path:
+- ${DG_TRANSFORMERS_OVERLAY}
+inputs:
+  MODEL_PATH: google/diffusiongemma-26B-A4B-it snapshot 52de6b914ee1749a7d4933202505ddf5b414ec43
+  TRAIN_FILE: gsm8k-math-code_l0-mix-20260909/train.parquet (also used as the unused validation file)
+  RUN_DIR: output directory of this run
+  RAY_ADDRESS: HEAD_IP:PORT of the Ray head started on the actor node
+  ACTOR_NODE_IP: IP of the actor node (Ray head)
+  ROLLOUT_NODE_IP: IP of the rollout node (Ray worker)
+  DG_TRANSFORMERS_OVERLAY: runtime Transformers 5.8.1 overlay built by training/scripts/install_dgemma_transformers_overlay.sh
+  NET_IFNAME: 'network interface for NCCL/Gloo (default: the default-route interface)'
+env:
+  GLOO_SOCKET_IFNAME: ${NET_IFNAME}
+  HYDRA_FULL_ERROR: '1'
+  MKL_NUM_THREADS: '8'
+  NCCL_DEBUG: WARN
+  NCCL_IB_DISABLE: '1'
+  NCCL_SOCKET_IFNAME: ${NET_IFNAME}
+  NUMEXPR_NUM_THREADS: '8'
+  OMP_NUM_THREADS: '8'
+  OPENBLAS_NUM_THREADS: '8'
+  PYTHONDONTWRITEBYTECODE: '1'
+  RAY_DEDUP_LOGS: '0'
+  RAY_memory_monitor_refresh_ms: '250'
+  RAY_memory_usage_threshold: '0.99'
+  SGLANG_MEMORY_SAVER_CUDA_GRAPH: '1'
+  SGLANG_NUMA_BIND_V2: '0'
+  SGLANG_SDAR_ASYNC_BACKPRESSURE: error
+  SGLANG_SDAR_ASYNC_CAPTURE: '0'
+  SGLANG_SDAR_ASYNC_DRAIN_TIMEOUT_S: '30'
+  SGLANG_SDAR_ASYNC_ENQUEUE_TIMEOUT_S: '0'
+  SGLANG_SDAR_ASYNC_QUEUE_DEPTH: '64'
+  SGLANG_SDAR_ASYNC_QUEUE_MAX_BYTES: '536870912'
+  SGLANG_SDAR_CUDA_GRAPH_LOG_INTERVAL: '500'
+  SGLANG_SDAR_REPLAY_EARLY_STREAM: '0'
+  SGLANG_SDAR_REPLAY_PRESELECT_FRACTION: ''
+  SGLANG_SDAR_ROLLOUT_CUDA_GRAPH: 'false'
+  SGLANG_SDAR_STREAM_REPLAY_TENSOR_STORE: tensor
+  SGLANG_SDAR_TPF_METADATA_FIRST: '0'
+  SGLANG_SDAR_TRACE_DIR: ${RUN_DIR}/trace
+  SGLANG_SDAR_TRACE_TENSORS: '1'
+  SGLANG_SDAR_TRACE_TENSOR_MAX_RECORDS: '0'
+  SGLANG_SDAR_TRACE_TENSOR_MAX_TOKENS: '256'
+  SGLANG_SDAR_TRACE_TENSOR_STORE: tensor
+  SGLANG_UPDATE_WEIGHTS_CPU_SERIALIZE: '0'
+  SGLANG_UPDATE_WEIGHTS_DISTRIBUTED: '0'
+  TMPDIR: ${NODE_TMP_DIR}
+  VERL_ACTOR_CHUNK_LOSS_DEBUG: '0'
+  VERL_ACTOR_CHUNK_LOSS_DEBUG_DIR: ${RUN_DIR}/actor_chunk_loss_debug
+  VERL_ACTOR_INPUT_CHECKSUM_DEBUG: '0'
+  VERL_ACTOR_INPUT_CHECKSUM_DIR: ${RUN_DIR}/actor_input_checksum_debug
+  VERL_ACTOR_PARAM_CHECKSUM_DEBUG: '0'
+  VERL_ACTOR_PARAM_CHECKSUM_DIR: ${RUN_DIR}/actor_param_checksum_debug
+  VERL_ACTOR_PARAM_CHECKSUM_LIMIT: '64'
+  VERL_ACTOR_ROLLOUT_SHARED_WEIGHTS: '0'
+  VERL_ACTOR_ROLLOUT_STREAM_EXPORT: '0'
+  VERL_LOGGING_LEVEL: INFO
+  VERL_QWEN_ALLOW_SHORT_SMOKE: '0'
+  VERL_QWEN_BLOCK_LOCAL_REPLAY: '0'
+  VERL_REPLAY_ROW_MANIFEST: '0'
+  VERL_REPLAY_ROW_MANIFEST_PATH: ${RUN_DIR}/replay_row_manifest.jsonl
+  # Reaches only the driver in the two-node setup, as in the paper run: the rollout prompts carry no <think> prefix.
+  VERL_RESPONSE_PREFIX: <think>
+  VERL_ROLLOUT_DUMP_ASYNC: '0'
+  VERL_ROLLOUT_DUMP_MODE: full
+  VERL_SGLANG_BATCH_INPUT_IDS: '0'
+  VERL_SGLANG_BATCH_RPC: '0'
+  VERL_STRICT_PERSISTENT_LIFECYCLE: '1'
+  VERL_TPF_METADATA_FIRST: '0'
+  WANDB_RESUME: allow
+  WANDB_RUN_ID: ${EXPERIMENT_NAME}
+overrides:
+- ~ray_kwargs.ray_init.num_cpus
+- ++actor_rollout_ref.model.path=${MODEL_PATH}
+- ++actor_rollout_ref.model.use_remove_padding=true
+- ++actor_rollout_ref.model.override_config.attn_implementation=eager
+- ++actor_rollout_ref.actor.use_remove_padding=true
+- ++actor_rollout_ref.actor.strategy=fsdp
+- ++actor_rollout_ref.actor.fsdp_config.fsdp_size=8
+- ++actor_rollout_ref.actor.block_length=256
+- ++actor_rollout_ref.actor.ppo_mini_batch_size=1
+- ++actor_rollout_ref.actor.ppo_max_token_len_per_gpu=8192
+- ++actor_rollout_ref.actor.confidence_weighted_ppo.enable=false
+- ++actor_rollout_ref.actor.dense_noisy_pg.enable=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.enable=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.mode=replace
+- ++actor_rollout_ref.actor.generation_consistency_jsd.objective=gemma_denoise_ce
+- ++actor_rollout_ref.actor.generation_consistency_jsd.teacher_source=rollout_final
+- ++actor_rollout_ref.actor.generation_consistency_jsd.entropy_coef=0.0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_replay_fp32_grad_accum=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_replay_all_steps=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_replay_full_blocks_only=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_future_logits_offset=0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_future_skip_tail_steps=0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_future_tail_policy=strict_skip
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_future_train_all_missing_with_final=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_future_train_final_step_with_final=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_future_clean_filter=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_future_clean_consistency_enable=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_future_hard_label_ce=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.clean_consistency_high_prob_threshold=0.9
+- ++actor_rollout_ref.actor.generation_consistency_jsd.clean_consistency_low_prob_threshold=0.5
+- ++actor_rollout_ref.actor.generation_consistency_jsd.stream_replay_chunk_size=1
+- ++actor_rollout_ref.actor.generation_consistency_jsd.stream_replay_empty_cache=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.tpf_reinforce.metadata_first=0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.stream_replay_step_stride=1
+- ++actor_rollout_ref.actor.generation_consistency_jsd.stream_replay_step_offset=0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.loss_coef=1.0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.row_chunk_size=1
+- ++actor_rollout_ref.actor.generation_consistency_jsd.selected_vocab_size=0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.teacher_max_prob_threshold=0.0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.student_final_prob_threshold=0.9
+- ++actor_rollout_ref.actor.generation_consistency_jsd.clean_filter_require_top_match=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.temperature=1.0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.logit_clip=50.0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.prob_eps=1.0e-6
+- ++actor_rollout_ref.actor.sanitize_nonfinite_grads=true
+- ++actor_rollout_ref.actor.compute_old_log_prob_entropy=false
+- ++actor_rollout_ref.actor.use_raw_replay_log_probs=true
+- ++actor_rollout_ref.actor.use_rollout_log_probs=false
+- ++actor_rollout_ref.actor.skip_old_log_prob_for_jsd_replace=true
+- ++actor_rollout_ref.actor.report_rollout_corr_metrics=false
+- ++actor_rollout_ref.actor.optim.lr=1e-5
+- ++actor_rollout_ref.actor.optim.lr_warmup_steps=0
+- ++actor_rollout_ref.actor.optim.weight_decay=0.1
+- ++actor_rollout_ref.rollout.response_length=4096
+- ++actor_rollout_ref.rollout.n=8
+- ++actor_rollout_ref.rollout.tensor_model_parallel_size=2
+- ++actor_rollout_ref.rollout.do_sample=true
+- ++actor_rollout_ref.rollout.temperature=0.8
+- ++actor_rollout_ref.rollout.top_k=-1
+- ++actor_rollout_ref.rollout.top_p=1.0
+- ++actor_rollout_ref.rollout.gpu_memory_utilization=0.40
+- ++actor_rollout_ref.rollout.enforce_eager=true
+- ++actor_rollout_ref.rollout.free_cache_engine=true
+- ++actor_rollout_ref.rollout.max_model_len=4096
+- ++actor_rollout_ref.rollout.max_num_batched_tokens=4096
+- ++actor_rollout_ref.rollout.max_num_seqs=1
+- ++actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=8192
+- ++actor_rollout_ref.rollout.calculate_log_probs=false
+- ++actor_rollout_ref.rollout.speed_only_dummy_rollout_logprobs=false
+- ++actor_rollout_ref.rollout.speed_only_dummy_rollout_logprobs_skip_actor_update=false
+- ++actor_rollout_ref.rollout.agent.num_workers=8
+- ++actor_rollout_ref.rollout.checkpoint_engine.backend=nccl
+- ++actor_rollout_ref.rollout.checkpoint_engine.update_weights_bucket_megabytes=2048
+- ++actor_rollout_ref.rollout.checkpoint_engine.engine_kwargs.nccl.rebuild_group=false
+- ++actor_rollout_ref.rollout.engine_kwargs.block_length=256
+- ++actor_rollout_ref.rollout.engine_kwargs.sglang.patched_sglang_path=${ORL_TRAINING}/sglang_dgemma
+- ++actor_rollout_ref.rollout.engine_kwargs.sglang.dllm_algorithm=Gemma4Renoise
+- ++actor_rollout_ref.rollout.engine_kwargs.sglang.dllm_algorithm_config=${ORL_RECIPE_DIR}/decode/gemma4_renoise_mix_train.yaml
+- ++actor_rollout_ref.rollout.engine_kwargs.sglang.attention_backend=triton
+- ++actor_rollout_ref.rollout.engine_kwargs.sglang.enable_memory_saver=false
+- ++data.train_files=${TRAIN_FILE}
+- ++data.val_files=${TRAIN_FILE}
+- ++data.train_batch_size=1
+- ++data.gen_batch_size=1
+- ++data.val_batch_size=1
+- ++data.train_max_samples=-1
+- ++data.val_max_samples=1
+- ++data.max_prompt_length=1024
+- ++data.max_response_length=4096
+- ++data.shuffle=false
+- ++custom_reward_function.path=${ORL_TRAINING}/rewards/math_code_mix.py
+- ++reward.custom_reward_function.path=${ORL_TRAINING}/rewards/math_code_mix.py
+- ++algorithm.ar_prob_advantage.max_training_rounds_per_sample=4096
+- ++trainer.nnodes=2
+- ++trainer.n_gpus_per_node=8
+- ++trainer.total_training_steps=900
+- ++trainer.total_epochs=900
+- ++trainer.logger=[console,wandb]
+- ++trainer.project_name=orl-diffusion-gemma
+- ++trainer.val_before_train=false
+- ++trainer.test_freq=-1
+- ++trainer.save_freq=50
+- ++trainer.max_actor_ckpt_to_keep=null
+- ++trainer.max_critic_ckpt_to_keep=null
+- ++trainer.resume_mode=auto
+- ++trainer.resume_from_path=null
+- ++trainer.experiment_name=${EXPERIMENT_NAME}
+- ++trainer.default_local_dir=${RUN_DIR}/checkpoints
+- ++trainer.rollout_data_dir=${RUN_DIR}/rollouts
+- ++trainer.validation_data_dir=${RUN_DIR}/validation
+- ++trainer.split_gpu_streaming.enable=true
+- ++trainer.split_gpu_streaming.rollout_gpus=8
+- ++trainer.split_gpu_streaming.actor_gpus=8
+- ++trainer.split_gpu_streaming.per_node_split=false
+- ++trainer.split_gpu_streaming.node_local_replay=false
+- ++trainer.split_gpu_streaming.node_local_actor_dispatch=false
+- ++trainer.split_gpu_streaming.node_local_delayed_grad_sync=false
+- ++trainer.split_gpu_streaming.node_local_consumer_flush_timeout_ms=0
+- ++trainer.split_gpu_streaming.node_local_consumer_max_inflight_chunks=4
+- ++trainer.split_gpu_streaming.overlap_pipeline=false
+- ++trainer.split_gpu_streaming.direct_compact_enable=false
+- ++trainer.split_gpu_streaming.replay_queue_chunk_size=1
+- ++trainer.split_gpu_streaming.replay_queue_pull_max_items=8
+- ++trainer.split_gpu_streaming.replay_queue_max_items=0
+- ++trainer.split_gpu_streaming.raw_replay_queue_max_items=0
+- ++trainer.split_gpu_streaming.raw_replay_queue_pull_max_items=8
+- ++trainer.split_gpu_streaming.tensor_replay_row_chunk_size=1
+- ++trainer.split_gpu_streaming.tensor_replay_empty_cache=false
+- ++trainer.split_gpu_streaming.tensor_replay_grad_rescale_basis=active_tokens
+- ++trainer.split_gpu_streaming.consume_max_inflight_chunks=2
+- ++trainer.split_gpu_streaming.direct_compact_local_tail=true
+- ++trainer.split_gpu_streaming.direct_compact_replay_tensor_store=tensor
+- ++trainer.split_gpu_streaming.actor_tensor_chunk_store=tensor
+- ++trainer.split_gpu_streaming.actor_tensor_chunk_dispatch=dp
+- ++trainer.split_gpu_streaming.gemma_stream_wave_aligned_pack=false
+- ++trainer.split_gpu_streaming.direct_compact_local_tail_parity_check=false
+- ++trainer.split_gpu_streaming.direct_compact_shadow_trace_all_manifest=false
+- ++trainer.split_gpu_streaming.tensor_grad_parity_check=false
+- ++trainer.split_gpu_streaming.tensor_grad_parity_max_rows=16
+- ++trainer.split_gpu_streaming.tensor_grad_parity_chunk_size=64
+- ++trainer.split_gpu_streaming.objective_grad_parity_check=false
+- ++trainer.split_gpu_streaming.objective_grad_parity_max_rows=16
+- ++trainer.split_gpu_streaming.ray_put_tensor_chunks=true
+- ++trainer.split_gpu_streaming.skip_weight_sync=false
+- ++data.apply_chat_template_kwargs.enable_thinking=true
+- ++actor_rollout_ref.rollout.engine_kwargs.rollout_extra_sampling_params.stop_token_ids=[1,106,50]
+- ++actor_rollout_ref.rollout.ignore_eos=false
+- ++data.seed=20260725
+- ++actor_rollout_ref.actor.data_loader_seed=20260725
+- ++actor_rollout_ref.actor.fsdp_config.seed=20260725
+- ++actor_rollout_ref.actor.fsdp_config.full_determinism=false
+- ++actor_rollout_ref.actor.gemma_correct_only_baseline.enable=true
+- ++actor_rollout_ref.actor.gemma_correct_only_baseline.strict_contract=false
+- ++actor_rollout_ref.actor.gemma_nostream_grpo.enable=false
+- ++actor_rollout_ref.actor.use_diffusion_gemma_external_kv_replay=true
+- ++actor_rollout_ref.actor.use_dynamic_bsz=false
+- ++actor_rollout_ref.actor.ppo_epochs=1
+- ++actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1
+- ++actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_replay_delivery=final_response
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_replay_prefix_grad_mode=detached
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_replay_decoder_chunk_size=8
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_replay_decoder_activation_offload=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_replay_real_row_pack=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_replay_row_isolated_moe=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_replay_full_row_isolated_decoder=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_replay_gpu_incremental_prefix_cache=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.rollout_quality_filter.enable=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.trace_all_ce_replay_input_mode=exact
+- ++actor_rollout_ref.actor.generation_consistency_jsd.adjacent_entropy_contraction.enable=false
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_adjacent_entropy_contraction.enable=true
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_adjacent_entropy_contraction.rho=0.2
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_adjacent_entropy_contraction.coef=100
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_adjacent_entropy_contraction.scope=all_valid
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_adjacent_entropy_contraction.floor=0.0
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_adjacent_entropy_contraction.ceiling=0.0
+- ++actor_rollout_ref.actor.use_kl_loss=false
+- ++actor_rollout_ref.actor.fsdp_config.use_orig_params=true
+- ++actor_rollout_ref.actor.fsdp_config.param_offload=false
+- ++actor_rollout_ref.actor.fsdp_config.optimizer_offload=false
+- ++actor_rollout_ref.actor.fsdp_config.reshard_after_forward=true
+- ++actor_rollout_ref.model.enable_activation_offload=false
+- ++algorithm.use_kl_in_reward=false
+- ++trainer.split_gpu_streaming.gemma_replay_block_chunk_size=4096
+- ++trainer.split_gpu_streaming.expected_rollout_node=${ROLLOUT_NODE_IP}
+- ++trainer.split_gpu_streaming.expected_actor_node=${ACTOR_NODE_IP}
+- ++actor_rollout_ref.actor.generation_consistency_jsd.gemma_replay_fp32_grad_accum_cpu_offload=false
+- ++ray_kwargs.ray_init.address=${RAY_ADDRESS}
+- ++ray_kwargs.ray_init.runtime_env.env_vars.PYTHONPATH=${ORL_TRAINING}/kernels/fast-diffusion-attention:${ORL_TRAINING}/sglang_dgemma:${ORL_TRAINING}/verl:${DG_TRANSFORMERS_OVERLAY}
+- ++ray_kwargs.ray_init.runtime_env.env_vars.VERL_SGLANG_PATCHED_PATH=${ORL_TRAINING}/sglang_dgemma
+- ++ray_kwargs.ray_init.runtime_env.env_vars.VERL_SGLANG_BATCH_INPUT_IDS=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.VERL_SGLANG_BATCH_RPC=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_ROLLOUT_CUDA_GRAPH=false
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_CUDA_GRAPH_LOG_INTERVAL=500
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_MEMORY_SAVER_CUDA_GRAPH=1
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_UPDATE_WEIGHTS_CPU_SERIALIZE=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_UPDATE_WEIGHTS_DISTRIBUTED=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.TMPDIR=${NODE_TMP_DIR}
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_NUMA_BIND_V2=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.WANDB_DIR=${RUN_DIR}/wandb
+- ++ray_kwargs.ray_init.runtime_env.env_vars.WANDB_CACHE_DIR=${RUN_DIR}/wandb/cache
+- ++ray_kwargs.ray_init.runtime_env.env_vars.WANDB_CONFIG_DIR=${RUN_DIR}/wandb/config
+- ++ray_kwargs.ray_init.runtime_env.env_vars.WANDB_DATA_DIR=${RUN_DIR}/wandb/data
+- ++ray_kwargs.ray_init.runtime_env.env_vars.WANDB_RUN_ID=${EXPERIMENT_NAME}
+- ++ray_kwargs.ray_init.runtime_env.env_vars.WANDB_RESUME=allow
+- ++ray_kwargs.ray_init.runtime_env.env_vars.NCCL_DEBUG=WARN
+- ++ray_kwargs.ray_init.runtime_env.env_vars.NCCL_IB_DISABLE=1
+- ++ray_kwargs.ray_init.runtime_env.env_vars.NCCL_IB_HCA=''
+- ++ray_kwargs.ray_init.runtime_env.env_vars.NCCL_NET_GDR_LEVEL=''
+- ++ray_kwargs.ray_init.runtime_env.env_vars.NCCL_IB_GID_INDEX=''
+- ++ray_kwargs.ray_init.runtime_env.env_vars.NCCL_SOCKET_IFNAME=${NET_IFNAME}
+- ++ray_kwargs.ray_init.runtime_env.env_vars.GLOO_SOCKET_IFNAME=${NET_IFNAME}
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_TRACE_DIR=${RUN_DIR}/trace
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_TRACE_TENSORS=1
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_REPLAY_EARLY_STREAM=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_ASYNC_CAPTURE=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_ASYNC_QUEUE_DEPTH=64
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_ASYNC_QUEUE_MAX_BYTES=536870912
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_ASYNC_BACKPRESSURE=error
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_ASYNC_ENQUEUE_TIMEOUT_S=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_ASYNC_DRAIN_TIMEOUT_S=30
+- ++ray_kwargs.ray_init.runtime_env.env_vars.VERL_ROLLOUT_DUMP_MODE=full
+- ++ray_kwargs.ray_init.runtime_env.env_vars.VERL_ROLLOUT_DUMP_ASYNC=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.VERL_QWEN_BLOCK_LOCAL_REPLAY=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_REPLAY_PRESELECT_FRACTION=
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_TRACE_TENSOR_STORE=tensor
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_STREAM_REPLAY_TENSOR_STORE=tensor
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_TPF_METADATA_FIRST=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.VERL_TPF_METADATA_FIRST=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.VERL_REPLAY_ROW_MANIFEST=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.VERL_REPLAY_ROW_MANIFEST_PATH=${RUN_DIR}/replay_row_manifest.jsonl
+- ++ray_kwargs.ray_init.runtime_env.env_vars.VERL_ACTOR_INPUT_CHECKSUM_DEBUG=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.VERL_ACTOR_INPUT_CHECKSUM_DIR=${RUN_DIR}/actor_input_checksum_debug
+- ++ray_kwargs.ray_init.runtime_env.env_vars.VERL_ACTOR_PARAM_CHECKSUM_DEBUG=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.VERL_ACTOR_PARAM_CHECKSUM_DIR=${RUN_DIR}/actor_param_checksum_debug
+- ++ray_kwargs.ray_init.runtime_env.env_vars.VERL_ACTOR_PARAM_CHECKSUM_LIMIT=64
+- ++ray_kwargs.ray_init.runtime_env.env_vars.VERL_ACTOR_CHUNK_LOSS_DEBUG=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.VERL_ACTOR_CHUNK_LOSS_DEBUG_DIR=${RUN_DIR}/actor_chunk_loss_debug
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_TRACE_TENSOR_MAX_RECORDS=0
+- ++ray_kwargs.ray_init.runtime_env.env_vars.SGLANG_SDAR_TRACE_TENSOR_MAX_TOKENS=256
+- ++data.val_max_samples=8

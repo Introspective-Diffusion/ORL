@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "purpose": "Index of manuscript experiment settings; follow referenced files for executable evaluation profiles and recorded training recipes",
+  "family_aliases": {"QwenDLM": "qwen-dlm", "LLaDA-2.1-mini": "llada", "DiffusionGemma": "dg"},
+  "checkpoints": "configs/paper/checkpoints.yaml",
+  "training": "configs/paper/training.yaml",
+  "speculative_decoding": "configs/paper/speculative.yaml",
+  "evaluation_suites": {
+    "main": {"plan": "repro/paper/main.yaml", "reference_results": "results/reference/main.json"},
+    "transfer": {"plan": "repro/paper/transfer.yaml"},
+    "tps_quick": {"plan": "repro/paper/tps.yaml", "scope": "Separate small same-GPU check; does not replace full-task paper timing"}
+  },
+  "decoding": {
+    "qwen-dlm": "configs/paper/decoding/qwen-dlm.yaml",
+    "llada": "configs/paper/decoding/llada.yaml",
+    "dg": "configs/paper/decoding/dg.yaml"
+  },
+  "input_and_scorer_records": {
+    "protocols": "repro/eval/portable/protocols.json",
+    "scorers": "repro/eval/portable/scoring_registry.json",
+    "transfer_inputs": "repro/paper/TRANSFER_GENERATION.md"
+  },
+  "documentation": "docs/reproduction/SETTINGS.md",
+  "release_scope": "Training recipes and evaluation code for the main table (training/ and evaluation/), with recorded experiment configurations",
+  "comparison_scope": {
+    "main": "ORL is evaluated as a joint training-and-decoding method using its specified generation policy; acceptance controls, temperatures and some output caps differ between Base and ORL",
+    "llada_fixed_decoder_sweep": "Manuscript fixed-control threshold grid; distinct from selected main-table settings and not an AEC-only ablation",
+    "literature": "Paper-reported baselines retain their original protocols and are not scorer-matched reruns"
+  },
+  "aggregation": {
+    "quality": "All tasks; length-terminated responses count as incorrect",
+    "tpf": "Mean completion_tokens / denoising_forwards over non-length-terminated responses",
+    "clean_tps": "Total clean completion tokens / total clean request time",
+    "all_output_tps": "Total returned tokens / total request time, including length failures",
+    "completed_output_tps": "Total clean completion tokens / total request time, including length failures",
+    "repeated_runs": "Equal-weight run-level means; sample standard deviation where reported",
+    "benchmark_macro": "Equal-weight benchmark-level means",
+    "repeat_unit": "Generation seed; repeated decoding seeds are not independent training runs"
+  },
+  "main_table_generation_repeats_by_family": {"qwen-dlm": 1, "llada": 1, "dg": 3},
+  "timing": {
+    "gpu": "H100 80GB",
+    "tensor_parallel_size": 1,
+    "requests_in_flight": 1,
+    "request_time_includes": ["prefill", "decoding", "scheduling", "host overhead"],
+    "request_time_excludes": ["model loading", "server startup", "preprocessing"],
+    "warmup": "Protocol-specific; original full-task Base/ORL accounting has no warmup exclusion"
+  }
+}
