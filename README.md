@@ -12,10 +12,8 @@
   <sup>*</sup>Equal contribution &nbsp; <sup>†</sup>Equal advising &nbsp; <sup>‡</sup>Corresponding authors
 </p>
 
-<!-- To update once the paper is on arXiv: point the Paper badge to arXiv and add the BibTeX url. -->
-
 <p align="center">
-  <a href="ORL_paper.pdf"><img src="https://img.shields.io/badge/%F0%9F%93%84%20Paper-PDF-b31b1b.svg" alt="Paper"></a>
+  <a href="https://arxiv.org/abs/2610.20687"><img src="https://img.shields.io/badge/arXiv-2610.20687-b31b1b.svg?logo=arxiv" alt="arXiv"></a>
   <a href="https://introspective-diffusion.github.io/orl-dlm/"><img src="https://img.shields.io/badge/Homepage-Project-orange.svg?logo=googlehome" alt="Project"></a>
   <a href="#model-zoo"><img src="https://img.shields.io/badge/HuggingFace-Models-blue.svg?logo=huggingface" alt="Hugging Face"></a>
   <a href="https://github.com/Introspective-Diffusion/DLMRT"><img src="https://img.shields.io/badge/Inference-Engine-2ea44f.svg?logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9Ii01LjIgLTIuMCAxNjEuMCAxNjEuMCI%2BPGcgdHJhbnNmb3JtPSJza2V3WCgtMTApIHRyYW5zbGF0ZSgyNy42LDApIiBmaWxsPSIjM0ZCOTUwIj48cmVjdCB4PSI2OSIgeT0iMCIgd2lkdGg9IjE5IiBoZWlnaHQ9IjE5IiByeD0iNC41IiBmaWxsPSIjOEREQ0EyIi8%2BPHJlY3QgeD0iOTIiIHk9IjAiIHdpZHRoPSIxOSIgaGVpZ2h0PSIxOSIgcng9IjQuNSIgZmlsbD0iIzhERENBMiIvPjxyZWN0IHg9IjQ2IiB5PSIyMyIgd2lkdGg9IjE5IiBoZWlnaHQ9IjE5IiByeD0iNC41Ii8%2BPHJlY3QgeD0iNjkiIHk9IjIzIiB3aWR0aD0iMTkiIGhlaWdodD0iMTkiIHJ4PSI0LjUiLz48cmVjdCB4PSIyMyIgeT0iNDYiIHdpZHRoPSIxOSIgaGVpZ2h0PSIxOSIgcng9IjQuNSIvPjxyZWN0IHg9IjQ2IiB5PSI0NiIgd2lkdGg9IjE5IiBoZWlnaHQ9IjE5IiByeD0iNC41Ii8%2BPHJlY3QgeD0iMCIgeT0iNjkiIHdpZHRoPSIxOSIgaGVpZ2h0PSIxOSIgcng9IjQuNSIvPjxyZWN0IHg9IjIzIiB5PSI2OSIgd2lkdGg9IjE5IiBoZWlnaHQ9IjE5IiByeD0iNC41Ii8%2BPHJlY3QgeD0iNDYiIHk9IjY5IiB3aWR0aD0iMTkiIGhlaWdodD0iMTkiIHJ4PSI0LjUiLz48cmVjdCB4PSI2OSIgeT0iNjkiIHdpZHRoPSIxOSIgaGVpZ2h0PSIxOSIgcng9IjQuNSIvPjxyZWN0IHg9IjkyIiB5PSI2OSIgd2lkdGg9IjE5IiBoZWlnaHQ9IjE5IiByeD0iNC41Ii8%2BPHJlY3QgeD0iNDYiIHk9IjkyIiB3aWR0aD0iMTkiIGhlaWdodD0iMTkiIHJ4PSI0LjUiLz48cmVjdCB4PSI2OSIgeT0iOTIiIHdpZHRoPSIxOSIgaGVpZ2h0PSIxOSIgcng9IjQuNSIvPjxyZWN0IHg9IjIzIiB5PSIxMTUiIHdpZHRoPSIxOSIgaGVpZ2h0PSIxOSIgcng9IjQuNSIvPjxyZWN0IHg9IjQ2IiB5PSIxMTUiIHdpZHRoPSIxOSIgaGVpZ2h0PSIxOSIgcng9IjQuNSIvPjxyZWN0IHg9IjIzIiB5PSIxMzgiIHdpZHRoPSIxOSIgaGVpZ2h0PSIxOSIgcng9IjQuNSIvPjwvZz48L3N2Zz4%3D" alt="Inference engine"></a>
@@ -368,10 +366,14 @@ This project builds upon:
 
 ```bibtex
 @misc{yu2026orl,
-  title  = {On-Policy Residual Learning for Diffusion Language Models},
-  author = {Yu, Yifan and Jian, Yuqing and Li, Jisen and Hu, Yuezhou and Zhang, Tianyi and Wu, Xiaoxia and
-            Zhu, Rui-Jie and Wang, Junxiong and Zhou, Zhongzhu and Lai, Fan and Zou, James and Xu, Chenfeng},
-  year   = {2026}
+  title         = {On-Policy Residual Learning for Diffusion Language Models},
+  author        = {Yu, Yifan and Jian, Yuqing and Li, Jisen and Hu, Yuezhou and Zhang, Tianyi and Wu, Xiaoxia and
+                   Zhu, Rui-Jie and Wang, Junxiong and Zhou, Zhongzhu and Lai, Fan and Zou, James and Xu, Chenfeng},
+  year          = {2026},
+  eprint        = {2610.20687},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  url           = {https://arxiv.org/abs/2610.20687}
 }
 ```
 
