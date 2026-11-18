@@ -15,7 +15,10 @@
 """SDAR model configuration"""
 
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_rope_utils import rope_config_validation
+try:
+    from transformers.modeling_rope_utils import rope_config_validation
+except ImportError:
+    rope_config_validation = None
 from transformers.utils import logging
 
 
@@ -175,6 +178,7 @@ class SDARConfig(PretrainedConfig):
         initializer_range=0.02,
         rms_norm_eps=1e-6,
         use_cache=True,
+        pad_token_id=None,
         tie_word_embeddings=False,
         rope_theta=10000.0,
         rope_scaling=None,
@@ -241,9 +245,11 @@ class SDARConfig(PretrainedConfig):
         # BC: if there is a 'type' field, move it to 'rope_type'.
         if self.rope_scaling is not None and "type" in self.rope_scaling:
             self.rope_scaling["rope_type"] = self.rope_scaling["type"]
-        rope_config_validation(self)
+        if not hasattr(self, "validate_rope") and rope_config_validation is not None:
+            rope_config_validation(self)
 
         super().__init__(
+            pad_token_id=pad_token_id,
             tie_word_embeddings=tie_word_embeddings,
             **kwargs,
         )
