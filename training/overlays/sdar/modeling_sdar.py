@@ -791,11 +791,17 @@ class SDARAttention(nn.Module):
                 key_states, value_states, self.layer_idx)
         elif past_key_value is not None and not kwargs.get("store_kv", False) and len(past_key_value) > self.layer_idx:
             # only retrive, do not store kv
-            past_key_states, past_value_states = past_key_value[self.layer_idx]
-            key_states = torch.cat(
-                [past_key_states, key_states], dim=-2)
-            value_states = torch.cat(
-                [past_value_states, value_states], dim=-2)
+            if hasattr(past_key_value, "layers"):
+                layer_cache = past_key_value.layers[self.layer_idx]
+                past_key_states = layer_cache.keys if getattr(layer_cache, "is_initialized", True) else None
+                past_value_states = layer_cache.values if getattr(layer_cache, "is_initialized", True) else None
+            else:
+                past_key_states, past_value_states = past_key_value[self.layer_idx]
+            if past_key_states is not None and past_value_states is not None and past_key_states.numel() > 0:
+                key_states = torch.cat(
+                    [past_key_states, key_states], dim=-2)
+                value_states = torch.cat(
+                    [past_value_states, value_states], dim=-2)
 
         if self.training:
             idlm_attention_metadata = kwargs.get("idlm_attention_metadata", None)
@@ -927,18 +933,36 @@ class SDARAttention(nn.Module):
             attn_weights = None
             additive_mask = None
             if attention_mask is not None:
-                attention_mask = attention_mask.bool()
-                if not torch.all(attention_mask):
-                    if attention_mask.dim() == 2:
-                        additive_mask = torch.zeros(
-                            (1, 1, attention_mask.shape[0], attention_mask.shape[1]),
-                            dtype=query_states.dtype,
-                            device=query_states.device,
-                        )
-                        additive_mask = additive_mask.masked_fill(~attention_mask[None, None, :, :], -1.0e4)
-                    else:
-                        additive_mask = torch.zeros_like(attention_mask, dtype=query_states.dtype)
-                        additive_mask = additive_mask.masked_fill(~attention_mask, -1.0e4)
+                if attention_mask.is_floating_point():
+                    additive_mask = attention_mask.to(dtype=query_states.dtype, device=query_states.device)
+                else:
+                    kv_len = key_states.shape[-2]
+                    mask_bool = attention_mask.bool()
+                    if not torch.all(mask_bool):
+                        if mask_bool.dim() == 2:
+                            if mask_bool.shape == (bsz, kv_len):
+                                mask_4d = mask_bool[:, None, None, :]
+                            elif mask_bool.shape == (q_len, kv_len):
+                                mask_4d = mask_bool[None, None, :, :]
+                            else:
+                                raise ValueError(
+                                    f"Expected 2D `attention_mask` of shape {(bsz, kv_len)} or {(q_len, kv_len)}, "
+                                    f"got {tuple(mask_bool.shape)}."
+                                )
+                            additive_mask = torch.zeros(
+                                mask_4d.shape,
+                                dtype=query_states.dtype,
+                                device=query_states.device,
+                            ).masked_fill(~mask_4d, -1.0e4)
+                        elif mask_bool.dim() == 4:
+                            additive_mask = torch.zeros_like(mask_bool, dtype=query_states.dtype).masked_fill(
+                                ~mask_bool, -1.0e4
+                            )
+                        else:
+                            raise ValueError(
+                                f"Expected 2D or 4D `attention_mask` in eval mode, got {mask_bool.dim()}D "
+                                f"with shape {tuple(mask_bool.shape)}."
+                            )
             attn_output, attn_weights = eager_attention_forward(
                 self,
                 query_states,
@@ -1155,9 +1179,8 @@ class SDARModel(SDARPreTrainedModel):
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache()
 
+        past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
         if cache_position is None:
-            past_seen_tokens = past_key_values.get_seq_length(
-            ) if past_key_values is not None else 0
             cache_position = torch.arange(
                 past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
             )
@@ -1165,9 +1188,36 @@ class SDARModel(SDARPreTrainedModel):
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
 
-        # causal_mask = self._update_causal_mask(
-        #     attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
-        # )
+        if not self.training and store_kv is not False and getattr(self.config, "use_regular_causal", True):
+            bsz, q_len = inputs_embeds.shape[:2]
+            target_len = past_seen_tokens + q_len
+            if attention_mask is None:
+                attention_mask = self._prepare_4d_causal_attention_mask_with_cache_position(
+                    None,
+                    sequence_length=q_len,
+                    target_length=target_len,
+                    dtype=inputs_embeds.dtype,
+                    cache_position=cache_position,
+                    batch_size=bsz,
+                    config=self.config,
+                    past_key_values=past_key_values,
+                )
+            elif (
+                isinstance(attention_mask, torch.Tensor)
+                and attention_mask.dim() == 2
+                and attention_mask.shape[0] == bsz
+                and attention_mask.shape[1] >= target_len
+            ):
+                attention_mask = self._prepare_4d_causal_attention_mask_with_cache_position(
+                    attention_mask,
+                    sequence_length=q_len,
+                    target_length=attention_mask.shape[1],
+                    dtype=inputs_embeds.dtype,
+                    cache_position=cache_position,
+                    batch_size=bsz,
+                    config=self.config,
+                    past_key_values=past_key_values,
+                )
 
         hidden_states = inputs_embeds
 
@@ -1840,7 +1890,7 @@ class SDARForCausalLM(SDARPreTrainedModel, GenerationMixin):
             slice_indices = slice(-logits_to_keep,
                                 None) if isinstance(logits_to_keep, int) else logits_to_keep
             hidden_states = hidden_states[:, slice_indices, :].contiguous()
-            fuse_linear_and_cross_entropy = self.config.fuse_cross_entropy and self.training
+            fuse_linear_and_cross_entropy = getattr(self.config, "fuse_cross_entropy", False) and self.training
             if fuse_linear_and_cross_entropy:
                 # When using fused_linear_ce_loss, we do not compute the whole logits on HBM
                 logits = None
