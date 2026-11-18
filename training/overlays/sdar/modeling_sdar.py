@@ -1044,6 +1044,11 @@ class SDARPreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
         elif isinstance(module, SDARRMSNorm):
             module.weight.data.fill_(1.0)
+        elif isinstance(module, SDARRotaryEmbedding):
+            inv_freq, attention_scaling = module.rope_init_fn(module.config, device=module.inv_freq.device)
+            module.inv_freq.copy_(inv_freq)
+            module.original_inv_freq.copy_(inv_freq)
+            module.attention_scaling = attention_scaling
 
 
 class SDARRotaryEmbedding(nn.Module):
@@ -1059,12 +1064,35 @@ class SDARRotaryEmbedding(nn.Module):
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+        if self.rope_type == "default":
+            self.rope_init_fn = self.compute_default_rope_parameters
+        else:
+            self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
 
         inv_freq, self.attention_scaling = self.rope_init_fn(
             self.config, device)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-        self.original_inv_freq = self.inv_freq
+        self.register_buffer("original_inv_freq", inv_freq.clone(), persistent=False)
+
+    @staticmethod
+    def compute_default_rope_parameters(
+        config: SDARConfig,
+        device: Optional[torch.device] = None,
+        seq_len: Optional[int] = None,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, float]:
+        del seq_len, kwargs
+        rope_params = getattr(config, "rope_parameters", None) or {}
+        base = float(rope_params.get("rope_theta", getattr(config, "rope_theta", 10000.0)))
+        partial_rotary_factor = float(
+            rope_params.get("partial_rotary_factor", getattr(config, "partial_rotary_factor", 1.0))
+        )
+        head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+        dim = int(head_dim * partial_rotary_factor)
+        inv_freq = 1.0 / (
+            base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float32) / dim)
+        )
+        return inv_freq, 1.0
 
     @torch.no_grad()
     # power user: used with advanced RoPE types (e.g. dynamic rope)
@@ -1090,7 +1118,7 @@ class SDARRotaryEmbedding(nn.Module):
 class SDARModel(SDARPreTrainedModel):
     def __init__(self, config: SDARConfig):
         super().__init__(config)
-        self.padding_idx = config.pad_token_id
+        self.padding_idx = getattr(config, "pad_token_id", None)
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(
@@ -1390,7 +1418,11 @@ class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs):
 
 @auto_docstring
 class SDARForCausalLM(SDARPreTrainedModel, GenerationMixin):
-    _tied_weights_keys = ["lm_head.weight"]
+    _tied_weights_keys = (
+        {"lm_head.weight": "model.embed_tokens.weight"}
+        if hasattr(PreTrainedModel, "get_expanded_tied_weights_keys")
+        else ["lm_head.weight"]
+    )
     _tp_plan = {"lm_head": "colwise_rep"}
     _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
 
